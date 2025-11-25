@@ -1323,11 +1323,12 @@ def create_powerpoint_presentation(results_current, results_previous, target_mon
                 cell = table.cell(idx + 1, col_idx)
                 cell.text_frame.paragraphs[0].font.size = Pt(10)
     
-    # Slide 6: Top 20 SKUs - MTD (split into 2 slides if needed)
+    # Slides 6-7: Top 20 SKUs - MTD (split across 2 slides, 10 each)
     if sku_mtd_df is not None and len(sku_mtd_df) > 0:
+        # Slide 6: SKUs 1-10
         slide6 = prs.slides.add_slide(prs.slide_layouts[5])
         title6 = slide6.shapes.title
-        title6.text = "Top 20 SKUs - MTD Performance"
+        title6.text = "Top 20 SKUs - MTD Performance (1-10)"
         title6.text_frame.paragraphs[0].font.size = Pt(32)
         
         rows = min(11, len(sku_mtd_df) + 1)  # First 10 SKUs
@@ -1360,17 +1361,57 @@ def create_powerpoint_presentation(results_current, results_previous, target_mon
             for col_idx in range(5):
                 cell = table.cell(idx + 1, col_idx)
                 cell.text_frame.paragraphs[0].font.size = Pt(9)
+        
+        # Slide 7: SKUs 11-20 (if available)
+        if len(sku_mtd_df) > 10:
+            slide7 = prs.slides.add_slide(prs.slide_layouts[5])
+            title7 = slide7.shapes.title
+            title7.text = "Top 20 SKUs - MTD Performance (11-20)"
+            title7.text_frame.paragraphs[0].font.size = Pt(32)
+            
+            remaining_rows = min(11, len(sku_mtd_df) - 10 + 1)
+            table = slide7.shapes.add_table(remaining_rows, cols, Inches(0.5), Inches(2), Inches(9), Inches(4.5)).table
+            
+            table.columns[0].width = Inches(0.6)
+            table.columns[1].width = Inches(1.2)
+            table.columns[2].width = Inches(3)
+            table.columns[3].width = Inches(2)
+            table.columns[4].width = Inches(2)
+            
+            # Header
+            for col_idx, header in enumerate(headers):
+                cell = table.cell(0, col_idx)
+                cell.text = header
+                cell.text_frame.paragraphs[0].font.size = Pt(10)
+                cell.text_frame.paragraphs[0].font.bold = True
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor(31, 119, 180)
+                cell.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+            
+            # Data rows 11-20
+            for idx, row in sku_mtd_df.reset_index(drop=True).iloc[10:20].iterrows():
+                row_num = idx - 9  # Adjust for table position
+                table.cell(row_num, 0).text = str(idx + 1)
+                table.cell(row_num, 1).text = str(row['code'])
+                table.cell(row_num, 2).text = str(row['name'])[:35] + '...' if len(str(row['name'])) > 35 else str(row['name'])
+                table.cell(row_num, 3).text = f"${row[f'{target_year}_mtd_sales']:,.0f}"
+                table.cell(row_num, 4).text = f"{row[f'{target_year}_mtd_gp']:.2f}%"
+                
+                for col_idx in range(5):
+                    cell = table.cell(row_num, col_idx)
+                    cell.text_frame.paragraphs[0].font.size = Pt(9)
     
-    # Slide 7: Top 20 SKUs - YTD
+    # Slides 8-9: Top 20 SKUs - YTD (split across 2 slides, 10 each)
     if sku_ytd_df is not None and len(sku_ytd_df) > 0:
-        slide7 = prs.slides.add_slide(prs.slide_layouts[5])
-        title7 = slide7.shapes.title
-        title7.text = "Top 20 SKUs - YTD Performance"
-        title7.text_frame.paragraphs[0].font.size = Pt(32)
+        # Slide 8: SKUs 1-10
+        slide8 = prs.slides.add_slide(prs.slide_layouts[5])
+        title8 = slide8.shapes.title
+        title8.text = "Top 20 SKUs - YTD Performance (1-10)"
+        title8.text_frame.paragraphs[0].font.size = Pt(32)
         
         rows = min(11, len(sku_ytd_df) + 1)
         cols = 5
-        table = slide7.shapes.add_table(rows, cols, Inches(0.5), Inches(2), Inches(9), Inches(4.5)).table
+        table = slide8.shapes.add_table(rows, cols, Inches(0.5), Inches(2), Inches(9), Inches(4.5)).table
         
         table.columns[0].width = Inches(0.6)
         table.columns[1].width = Inches(1.2)
@@ -1398,6 +1439,45 @@ def create_powerpoint_presentation(results_current, results_previous, target_mon
             for col_idx in range(5):
                 cell = table.cell(idx + 1, col_idx)
                 cell.text_frame.paragraphs[0].font.size = Pt(9)
+        
+        # Slide 9: SKUs 11-20 (if available)
+        if len(sku_ytd_df) > 10:
+            slide9 = prs.slides.add_slide(prs.slide_layouts[5])
+            title9 = slide9.shapes.title
+            title9.text = "Top 20 SKUs - YTD Performance (11-20)"
+            title9.text_frame.paragraphs[0].font.size = Pt(32)
+            
+            remaining_rows = min(11, len(sku_ytd_df) - 10 + 1)
+            table = slide9.shapes.add_table(remaining_rows, cols, Inches(0.5), Inches(2), Inches(9), Inches(4.5)).table
+            
+            table.columns[0].width = Inches(0.6)
+            table.columns[1].width = Inches(1.2)
+            table.columns[2].width = Inches(3)
+            table.columns[3].width = Inches(2)
+            table.columns[4].width = Inches(2)
+            
+            # Header
+            for col_idx, header in enumerate(headers):
+                cell = table.cell(0, col_idx)
+                cell.text = header
+                cell.text_frame.paragraphs[0].font.size = Pt(10)
+                cell.text_frame.paragraphs[0].font.bold = True
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor(31, 119, 180)
+                cell.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+            
+            # Data rows 11-20
+            for idx, row in sku_ytd_df.reset_index(drop=True).iloc[10:20].iterrows():
+                row_num = idx - 9  # Adjust for table position
+                table.cell(row_num, 0).text = str(idx + 1)
+                table.cell(row_num, 1).text = str(row['code'])
+                table.cell(row_num, 2).text = str(row['name'])[:35] + '...' if len(str(row['name'])) > 35 else str(row['name'])
+                table.cell(row_num, 3).text = f"${row[f'{target_year}_ytd_sales']:,.0f}"
+                table.cell(row_num, 4).text = f"{row[f'{target_year}_ytd_gp']:.2f}%"
+                
+                for col_idx in range(5):
+                    cell = table.cell(row_num, col_idx)
+                    cell.text_frame.paragraphs[0].font.size = Pt(9)
     
     # Save presentation to bytes
     ppt_output = io.BytesIO()
