@@ -1494,12 +1494,7 @@ if uploaded_file is not None:
             excel_file = pd.ExcelFile(uploaded_file)
             
             # Success message in a cleaner format
-            col_msg1, col_msg2 = st.columns([3, 1])
-            with col_msg1:
-                st.success(f"✅ File uploaded successfully! Found {len(excel_file.sheet_names)} sheet(s)")
-            with col_msg2:
-                with st.expander("📄 Sheets"):
-                    st.write(excel_file.sheet_names)
+            st.success(f"✅ File uploaded successfully! Found {len(excel_file.sheet_names)} sheet(s)")
             
             # Read and process all sheets
             dataframes = {}
@@ -1621,11 +1616,7 @@ if uploaded_file is not None:
                 summary_df = pd.DataFrame(summary_data)
                 st.dataframe(summary_df, use_container_width=True, hide_index=True)
             
-            # Download reports section with better organization
-            st.markdown("---")
-            st.markdown("## 📥 Download Reports")
-            
-            # Generate all reports first
+            # Generate all reports first (but don't show download section yet)
             excel_output = create_excel_report(
                 results_current, 
                 results_previous, 
@@ -1657,6 +1648,94 @@ if uploaded_file is not None:
                 comparison_year, month_name, brand_mtd_df, brand_ytd_df,
                 sku_mtd_df, sku_ytd_df
             )
+            
+            # Data preview section
+            st.markdown("---")
+            st.markdown("## 🔍 Data Preview")
+            
+            if brand_mtd_output:
+                st.markdown("### 🏆 Top 10 Brands")
+                
+                tab1, tab2 = st.tabs(["📈 MTD Performance", "📊 YTD Performance"])
+                
+                with tab1:
+                    preview_mtd = []
+                    for idx, row in brand_mtd_df.reset_index(drop=True).iterrows():
+                        preview_mtd.append({
+                            'Rank': idx + 1,
+                            'Brand': row['brand_name'],
+                            f'{target_year} MTD Sales': f"${row[f'{target_year}_mtd_sales']:,.2f}",
+                            f'{target_year} GP%': f"{row[f'{target_year}_mtd_gp']:.2f}%",
+                            f'{comparison_year} MTD Sales': f"${row[f'{comparison_year}_mtd_sales']:,.2f}",
+                            f'{comparison_year} GP%': f"{row[f'{comparison_year}_mtd_gp']:.2f}%",
+                            '% Achieved': f"{row['mtd_achieved_pct']:.2f}%"
+                        })
+                    
+                    preview_mtd_df = pd.DataFrame(preview_mtd)
+                    st.dataframe(preview_mtd_df, use_container_width=True, hide_index=True)
+                
+                with tab2:
+                    if brand_ytd_output:
+                        preview_ytd = []
+                        for idx, row in brand_ytd_df.reset_index(drop=True).iterrows():
+                            preview_ytd.append({
+                                'Rank': idx + 1,
+                                'Brand': row['brand_name'],
+                                f'{target_year} YTD Sales': f"${row[f'{target_year}_ytd_sales']:,.2f}",
+                                f'{target_year} GP%': f"{row[f'{target_year}_ytd_gp']:.2f}%",
+                                f'{comparison_year} YTD Sales': f"${row[f'{comparison_year}_ytd_sales']:,.2f}",
+                                f'{comparison_year} GP%': f"{row[f'{comparison_year}_ytd_gp']:.2f}%",
+                                '% Achieved': f"{row['ytd_achieved_pct']:.2f}%"
+                            })
+                        
+                        preview_ytd_df = pd.DataFrame(preview_ytd)
+                        st.dataframe(preview_ytd_df, use_container_width=True, hide_index=True)
+            
+            # SKU previews
+            if sku_mtd_output:
+                st.markdown("### 🏷️ Top 20 SKUs")
+                
+                tab3, tab4 = st.tabs(["📈 MTD SKU Performance", "📊 YTD SKU Performance"])
+                
+                with tab3:
+                    preview_sku_mtd = []
+                    for idx, row in sku_mtd_df.reset_index(drop=True).iterrows():
+                        preview_sku_mtd.append({
+                            'Rank': idx + 1,
+                            'Code': row['code'],
+                            'Item Name': row['name'][:50] + '...' if len(row['name']) > 50 else row['name'],
+                            f'{target_year} MTD Sales': f"${row[f'{target_year}_mtd_sales']:,.2f}",
+                            f'{target_year} GP%': f"{row[f'{target_year}_mtd_gp']:.2f}%",
+                            f'{comparison_year} MTD Sales': f"${row[f'{comparison_year}_mtd_sales']:,.2f}",
+                            f'{comparison_year} GP%': f"{row[f'{comparison_year}_mtd_gp']:.2f}%"
+                        })
+                    
+                    preview_sku_mtd_df = pd.DataFrame(preview_sku_mtd)
+                    st.dataframe(preview_sku_mtd_df, use_container_width=True, hide_index=True)
+                
+                with tab4:
+                    if sku_ytd_output:
+                        preview_sku_ytd = []
+                        for idx, row in sku_ytd_df.reset_index(drop=True).iterrows():
+                            preview_sku_ytd.append({
+                                'Rank': idx + 1,
+                                'Code': row['code'],
+                                'Item Name': row['name'][:50] + '...' if len(row['name']) > 50 else row['name'],
+                                f'{target_year} YTD Sales': f"${row[f'{target_year}_ytd_sales']:,.2f}",
+                                f'{target_year} GP%': f"{row[f'{target_year}_ytd_gp']:.2f}%",
+                                f'{comparison_year} YTD Sales': f"${row[f'{comparison_year}_ytd_sales']:,.2f}",
+                                f'{comparison_year} GP%': f"{row[f'{comparison_year}_ytd_gp']:.2f}%"
+                            })
+                        
+                        preview_sku_ytd_df = pd.DataFrame(preview_sku_ytd)
+                        st.dataframe(preview_sku_ytd_df, use_container_width=True, hide_index=True)
+            
+            # Additional info
+            st.info(f"ℹ️ Processed {results_current['items_processed']} items with data for {target_year} | {total_brands} brands identified")
+            
+            # Download reports section with better organization
+            st.markdown("---")
+            st.markdown("## 📥 Download Reports")
             
             # Organized download tabs
             tab1, tab2, tab3, tab4 = st.tabs(["📊 Summary Reports", "🏆 Brand Reports", "🏷️ SKU Reports", "📽️ PowerPoint"])
@@ -1759,90 +1838,6 @@ if uploaded_file is not None:
                     st.caption("Perfect for executive presentations and stakeholder meetings")
                 else:
                     st.error("❌ Could not generate PowerPoint presentation")
-            
-            # Data preview section
-            st.markdown("---")
-            st.markdown("## 🔍 Data Preview")
-            
-            if brand_mtd_output:
-                st.markdown("### 🏆 Top 10 Brands")
-                
-                tab1, tab2 = st.tabs(["📈 MTD Performance", "📊 YTD Performance"])
-                
-                with tab1:
-                    preview_mtd = []
-                    for idx, row in brand_mtd_df.reset_index(drop=True).iterrows():
-                        preview_mtd.append({
-                            'Rank': idx + 1,
-                            'Brand': row['brand_name'],
-                            f'{target_year} MTD Sales': f"${row[f'{target_year}_mtd_sales']:,.2f}",
-                            f'{target_year} GP%': f"{row[f'{target_year}_mtd_gp']:.2f}%",
-                            f'{comparison_year} MTD Sales': f"${row[f'{comparison_year}_mtd_sales']:,.2f}",
-                            f'{comparison_year} GP%': f"{row[f'{comparison_year}_mtd_gp']:.2f}%",
-                            '% Achieved': f"{row['mtd_achieved_pct']:.2f}%"
-                        })
-                    
-                    preview_mtd_df = pd.DataFrame(preview_mtd)
-                    st.dataframe(preview_mtd_df, use_container_width=True, hide_index=True)
-                
-                with tab2:
-                    if brand_ytd_output:
-                        preview_ytd = []
-                        for idx, row in brand_ytd_df.reset_index(drop=True).iterrows():
-                            preview_ytd.append({
-                                'Rank': idx + 1,
-                                'Brand': row['brand_name'],
-                                f'{target_year} YTD Sales': f"${row[f'{target_year}_ytd_sales']:,.2f}",
-                                f'{target_year} GP%': f"{row[f'{target_year}_ytd_gp']:.2f}%",
-                                f'{comparison_year} YTD Sales': f"${row[f'{comparison_year}_ytd_sales']:,.2f}",
-                                f'{comparison_year} GP%': f"{row[f'{comparison_year}_ytd_gp']:.2f}%",
-                                '% Achieved': f"{row['ytd_achieved_pct']:.2f}%"
-                            })
-                        
-                        preview_ytd_df = pd.DataFrame(preview_ytd)
-                        st.dataframe(preview_ytd_df, use_container_width=True, hide_index=True)
-            
-            # SKU previews
-            if sku_mtd_output:
-                st.markdown("### 🏷️ Top 20 SKUs")
-                
-                tab3, tab4 = st.tabs(["📈 MTD SKU Performance", "📊 YTD SKU Performance"])
-                
-                with tab3:
-                    preview_sku_mtd = []
-                    for idx, row in sku_mtd_df.reset_index(drop=True).iterrows():
-                        preview_sku_mtd.append({
-                            'Rank': idx + 1,
-                            'Code': row['code'],
-                            'Item Name': row['name'][:50] + '...' if len(row['name']) > 50 else row['name'],
-                            f'{target_year} MTD Sales': f"${row[f'{target_year}_mtd_sales']:,.2f}",
-                            f'{target_year} GP%': f"{row[f'{target_year}_mtd_gp']:.2f}%",
-                            f'{comparison_year} MTD Sales': f"${row[f'{comparison_year}_mtd_sales']:,.2f}",
-                            f'{comparison_year} GP%': f"{row[f'{comparison_year}_mtd_gp']:.2f}%"
-                        })
-                    
-                    preview_sku_mtd_df = pd.DataFrame(preview_sku_mtd)
-                    st.dataframe(preview_sku_mtd_df, use_container_width=True, hide_index=True)
-                
-                with tab4:
-                    if sku_ytd_output:
-                        preview_sku_ytd = []
-                        for idx, row in sku_ytd_df.reset_index(drop=True).iterrows():
-                            preview_sku_ytd.append({
-                                'Rank': idx + 1,
-                                'Code': row['code'],
-                                'Item Name': row['name'][:50] + '...' if len(row['name']) > 50 else row['name'],
-                                f'{target_year} YTD Sales': f"${row[f'{target_year}_ytd_sales']:,.2f}",
-                                f'{target_year} GP%': f"{row[f'{target_year}_ytd_gp']:.2f}%",
-                                f'{comparison_year} YTD Sales': f"${row[f'{comparison_year}_ytd_sales']:,.2f}",
-                                f'{comparison_year} GP%': f"{row[f'{comparison_year}_ytd_gp']:.2f}%"
-                            })
-                        
-                        preview_sku_ytd_df = pd.DataFrame(preview_sku_ytd)
-                        st.dataframe(preview_sku_ytd_df, use_container_width=True, hide_index=True)
-            
-            # Additional info
-            st.info(f"ℹ️ Processed {results_current['items_processed']} items with data for {target_year} | {total_brands} brands identified")
             
     except Exception as e:
         st.error(f"❌ Error processing file: {str(e)}")
