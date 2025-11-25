@@ -10,6 +10,10 @@ import tempfile
 import os
 import re
 from collections import defaultdict
+from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.enum.text import PP_ALIGN
+from pptx.dml.color import RGBColor
 
 # Set page configuration
 st.set_page_config(
@@ -1066,6 +1070,342 @@ def create_brand_report(all_items, target_month, target_year, comparison_year, m
     
     return output, bm_df, len(brands)
 
+def create_powerpoint_presentation(results_current, results_previous, target_month, target_year, 
+                                   comparison_year, month_name, brand_mtd_df, brand_ytd_df, 
+                                   sku_mtd_df, sku_ytd_df):
+    """Create a comprehensive PowerPoint presentation with all sales insights"""
+    
+    prs = Presentation()
+    prs.slide_width = Inches(10)
+    prs.slide_height = Inches(7.5)
+    
+    # Slide 1: Title Slide
+    slide1 = prs.slides.add_slide(prs.slide_layouts[6])  # Blank layout
+    
+    # Add title
+    title_box = slide1.shapes.add_textbox(Inches(1), Inches(2.5), Inches(8), Inches(1))
+    title_frame = title_box.text_frame
+    title_frame.text = f"Sales Performance Report"
+    title_p = title_frame.paragraphs[0]
+    title_p.font.size = Pt(44)
+    title_p.font.bold = True
+    title_p.font.color.rgb = RGBColor(31, 119, 180)
+    title_p.alignment = PP_ALIGN.CENTER
+    
+    # Add subtitle
+    subtitle_box = slide1.shapes.add_textbox(Inches(1), Inches(3.8), Inches(8), Inches(0.8))
+    subtitle_frame = subtitle_box.text_frame
+    subtitle_frame.text = f"{month_name} {target_year}"
+    subtitle_p = subtitle_frame.paragraphs[0]
+    subtitle_p.font.size = Pt(32)
+    subtitle_p.font.color.rgb = RGBColor(100, 100, 100)
+    subtitle_p.alignment = PP_ALIGN.CENTER
+    
+    # Add date
+    date_box = slide1.shapes.add_textbox(Inches(1), Inches(5), Inches(8), Inches(0.5))
+    date_frame = date_box.text_frame
+    from datetime import datetime
+    date_frame.text = f"Generated on {datetime.now().strftime('%B %d, %Y')}"
+    date_p = date_frame.paragraphs[0]
+    date_p.font.size = Pt(14)
+    date_p.font.color.rgb = RGBColor(150, 150, 150)
+    date_p.alignment = PP_ALIGN.CENTER
+    
+    # Slide 2: Executive Summary with Key Metrics
+    slide2 = prs.slides.add_slide(prs.slide_layouts[5])  # Title only
+    title2 = slide2.shapes.title
+    title2.text = "Executive Summary"
+    title2.text_frame.paragraphs[0].font.size = Pt(36)
+    title2.text_frame.paragraphs[0].font.color.rgb = RGBColor(31, 119, 180)
+    
+    # Calculate metrics
+    mtd_change = ((results_current['MTD Gross Sales'] / results_previous['MTD Gross Sales'] - 1) * 100) if results_previous['MTD Gross Sales'] > 0 else 0
+    ytd_change = ((results_current['YTD Gross Sales'] / results_previous['YTD Gross Sales'] - 1) * 100) if results_previous['YTD Gross Sales'] > 0 else 0
+    mtd_gp_change = results_current['MTD GP%'] - results_previous['MTD GP%']
+    ytd_gp_change = results_current['YTD GP%'] - results_previous['YTD GP%']
+    
+    # Create metrics boxes
+    metrics = [
+        ("MTD Gross Sales", f"${results_current['MTD Gross Sales']:,.0f}", f"{mtd_change:+.1f}%"),
+        ("MTD GP%", f"{results_current['MTD GP%']:.2f}%", f"{mtd_gp_change:+.2f}%"),
+        ("YTD Gross Sales", f"${results_current['YTD Gross Sales']:,.0f}", f"{ytd_change:+.1f}%"),
+        ("YTD GP%", f"{results_current['YTD GP%']:.2f}%", f"{ytd_gp_change:+.2f}%")
+    ]
+    
+    left_start = 0.5
+    top_start = 2
+    box_width = 2.2
+    box_height = 2
+    gap = 0.15
+    
+    for i, (label, value, change) in enumerate(metrics):
+        col = i % 2
+        row = i // 2
+        left = left_start + col * (box_width + gap)
+        top = top_start + row * (box_height + gap)
+        
+        # Background box
+        shape = slide2.shapes.add_shape(
+            1,  # Rectangle
+            Inches(left), Inches(top), Inches(box_width), Inches(box_height)
+        )
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = RGBColor(240, 248, 255)
+        shape.line.color.rgb = RGBColor(31, 119, 180)
+        shape.line.width = Pt(2)
+        
+        # Label
+        label_box = slide2.shapes.add_textbox(Inches(left + 0.1), Inches(top + 0.2), Inches(box_width - 0.2), Inches(0.5))
+        label_frame = label_box.text_frame
+        label_frame.text = label
+        label_p = label_frame.paragraphs[0]
+        label_p.font.size = Pt(14)
+        label_p.font.bold = True
+        label_p.font.color.rgb = RGBColor(50, 50, 50)
+        label_p.alignment = PP_ALIGN.CENTER
+        
+        # Value
+        value_box = slide2.shapes.add_textbox(Inches(left + 0.1), Inches(top + 0.8), Inches(box_width - 0.2), Inches(0.6))
+        value_frame = value_box.text_frame
+        value_frame.text = value
+        value_p = value_frame.paragraphs[0]
+        value_p.font.size = Pt(24)
+        value_p.font.bold = True
+        value_p.font.color.rgb = RGBColor(31, 119, 180)
+        value_p.alignment = PP_ALIGN.CENTER
+        
+        # Change
+        change_box = slide2.shapes.add_textbox(Inches(left + 0.1), Inches(top + 1.5), Inches(box_width - 0.2), Inches(0.4))
+        change_frame = change_box.text_frame
+        change_frame.text = change
+        change_p = change_frame.paragraphs[0]
+        change_p.font.size = Pt(16)
+        change_p.font.bold = True
+        # Color based on positive/negative
+        if '+' in change:
+            change_p.font.color.rgb = RGBColor(0, 128, 0)
+        else:
+            change_p.font.color.rgb = RGBColor(255, 0, 0)
+        change_p.alignment = PP_ALIGN.CENTER
+    
+    # Slide 3: MTD vs YTD Comparison Chart
+    slide3 = prs.slides.add_slide(prs.slide_layouts[5])
+    title3 = slide3.shapes.title
+    title3.text = f"MTD vs YTD Performance - {target_year}"
+    title3.text_frame.paragraphs[0].font.size = Pt(32)
+    
+    # Create comparison chart
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    
+    categories = [str(target_year), str(comparison_year)]
+    x = np.arange(len(categories))
+    width = 0.35
+    
+    # Sales chart
+    mtd_sales = [results_current['MTD Gross Sales'], results_previous['MTD Gross Sales']]
+    ytd_sales = [results_current['YTD Gross Sales'], results_previous['YTD Gross Sales']]
+    
+    axes[0].bar(x - width/2, [v/1000 for v in mtd_sales], width, label='MTD', color='#2E86AB', alpha=0.8)
+    axes[0].bar(x + width/2, [v/1000 for v in ytd_sales], width, label='YTD', color='#A23B72', alpha=0.8)
+    axes[0].set_ylabel('Sales (in thousands)', fontsize=10, fontweight='bold')
+    axes[0].set_title('Gross Sales Comparison', fontsize=12, fontweight='bold')
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels(categories)
+    axes[0].legend()
+    axes[0].grid(axis='y', alpha=0.3)
+    
+    # GP% chart
+    mtd_gp = [results_current['MTD GP%'], results_previous['MTD GP%']]
+    ytd_gp = [results_current['YTD GP%'], results_previous['YTD GP%']]
+    
+    axes[1].bar(x - width/2, mtd_gp, width, label='MTD', color='#2E86AB', alpha=0.8)
+    axes[1].bar(x + width/2, ytd_gp, width, label='YTD', color='#A23B72', alpha=0.8)
+    axes[1].set_ylabel('GP%', fontsize=10, fontweight='bold')
+    axes[1].set_title('Gross Profit % Comparison', fontsize=12, fontweight='bold')
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(categories)
+    axes[1].legend()
+    axes[1].grid(axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save chart to image
+    chart_buffer = io.BytesIO()
+    fig.savefig(chart_buffer, format='png', dpi=150, bbox_inches='tight')
+    chart_buffer.seek(0)
+    plt.close(fig)
+    
+    # Add chart to slide
+    slide3.shapes.add_picture(chart_buffer, Inches(0.5), Inches(2), width=Inches(9))
+    
+    # Slide 4: Top 10 Brands - MTD
+    if brand_mtd_df is not None and len(brand_mtd_df) > 0:
+        slide4 = prs.slides.add_slide(prs.slide_layouts[5])
+        title4 = slide4.shapes.title
+        title4.text = "Top 10 Brands - MTD Performance"
+        title4.text_frame.paragraphs[0].font.size = Pt(32)
+        
+        # Create table
+        rows = min(11, len(brand_mtd_df) + 1)  # Header + up to 10 rows
+        cols = 5
+        left = Inches(0.5)
+        top = Inches(2)
+        width = Inches(9)
+        height = Inches(4.5)
+        
+        table = slide4.shapes.add_table(rows, cols, left, top, width, height).table
+        
+        # Set column widths
+        table.columns[0].width = Inches(0.8)
+        table.columns[1].width = Inches(3)
+        table.columns[2].width = Inches(2)
+        table.columns[3].width = Inches(1.6)
+        table.columns[4].width = Inches(1.6)
+        
+        # Header
+        headers = ['Rank', 'Brand', f'{target_year} MTD Sales', f'{target_year} GP%', '% Achieved']
+        for col_idx, header in enumerate(headers):
+            cell = table.cell(0, col_idx)
+            cell.text = header
+            cell.text_frame.paragraphs[0].font.size = Pt(11)
+            cell.text_frame.paragraphs[0].font.bold = True
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = RGBColor(31, 119, 180)
+            cell.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+        
+        # Data rows
+        for idx, row in brand_mtd_df.reset_index(drop=True).head(10).iterrows():
+            table.cell(idx + 1, 0).text = str(idx + 1)
+            table.cell(idx + 1, 1).text = str(row['brand_name'])
+            table.cell(idx + 1, 2).text = f"${row[f'{target_year}_mtd_sales']:,.0f}"
+            table.cell(idx + 1, 3).text = f"{row[f'{target_year}_mtd_gp']:.2f}%"
+            table.cell(idx + 1, 4).text = f"{row['mtd_achieved_pct']:.1f}%"
+            
+            for col_idx in range(5):
+                cell = table.cell(idx + 1, col_idx)
+                cell.text_frame.paragraphs[0].font.size = Pt(10)
+    
+    # Slide 5: Top 10 Brands - YTD
+    if brand_ytd_df is not None and len(brand_ytd_df) > 0:
+        slide5 = prs.slides.add_slide(prs.slide_layouts[5])
+        title5 = slide5.shapes.title
+        title5.text = "Top 10 Brands - YTD Performance"
+        title5.text_frame.paragraphs[0].font.size = Pt(32)
+        
+        rows = min(11, len(brand_ytd_df) + 1)
+        cols = 5
+        table = slide5.shapes.add_table(rows, cols, Inches(0.5), Inches(2), Inches(9), Inches(4.5)).table
+        
+        table.columns[0].width = Inches(0.8)
+        table.columns[1].width = Inches(3)
+        table.columns[2].width = Inches(2)
+        table.columns[3].width = Inches(1.6)
+        table.columns[4].width = Inches(1.6)
+        
+        headers = ['Rank', 'Brand', f'{target_year} YTD Sales', f'{target_year} GP%', '% Achieved']
+        for col_idx, header in enumerate(headers):
+            cell = table.cell(0, col_idx)
+            cell.text = header
+            cell.text_frame.paragraphs[0].font.size = Pt(11)
+            cell.text_frame.paragraphs[0].font.bold = True
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = RGBColor(31, 119, 180)
+            cell.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+        
+        for idx, row in brand_ytd_df.reset_index(drop=True).head(10).iterrows():
+            table.cell(idx + 1, 0).text = str(idx + 1)
+            table.cell(idx + 1, 1).text = str(row['brand_name'])
+            table.cell(idx + 1, 2).text = f"${row[f'{target_year}_ytd_sales']:,.0f}"
+            table.cell(idx + 1, 3).text = f"{row[f'{target_year}_ytd_gp']:.2f}%"
+            table.cell(idx + 1, 4).text = f"{row['ytd_achieved_pct']:.1f}%"
+            
+            for col_idx in range(5):
+                cell = table.cell(idx + 1, col_idx)
+                cell.text_frame.paragraphs[0].font.size = Pt(10)
+    
+    # Slide 6: Top 20 SKUs - MTD (split into 2 slides if needed)
+    if sku_mtd_df is not None and len(sku_mtd_df) > 0:
+        slide6 = prs.slides.add_slide(prs.slide_layouts[5])
+        title6 = slide6.shapes.title
+        title6.text = "Top 20 SKUs - MTD Performance"
+        title6.text_frame.paragraphs[0].font.size = Pt(32)
+        
+        rows = min(11, len(sku_mtd_df) + 1)  # First 10 SKUs
+        cols = 5
+        table = slide6.shapes.add_table(rows, cols, Inches(0.5), Inches(2), Inches(9), Inches(4.5)).table
+        
+        table.columns[0].width = Inches(0.6)
+        table.columns[1].width = Inches(1.2)
+        table.columns[2].width = Inches(3)
+        table.columns[3].width = Inches(2)
+        table.columns[4].width = Inches(2)
+        
+        headers = ['Rank', 'Code', 'Item Name', f'{target_year} MTD Sales', f'{target_year} GP%']
+        for col_idx, header in enumerate(headers):
+            cell = table.cell(0, col_idx)
+            cell.text = header
+            cell.text_frame.paragraphs[0].font.size = Pt(10)
+            cell.text_frame.paragraphs[0].font.bold = True
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = RGBColor(31, 119, 180)
+            cell.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+        
+        for idx, row in sku_mtd_df.reset_index(drop=True).head(10).iterrows():
+            table.cell(idx + 1, 0).text = str(idx + 1)
+            table.cell(idx + 1, 1).text = str(row['code'])
+            table.cell(idx + 1, 2).text = str(row['name'])[:35] + '...' if len(str(row['name'])) > 35 else str(row['name'])
+            table.cell(idx + 1, 3).text = f"${row[f'{target_year}_mtd_sales']:,.0f}"
+            table.cell(idx + 1, 4).text = f"{row[f'{target_year}_mtd_gp']:.2f}%"
+            
+            for col_idx in range(5):
+                cell = table.cell(idx + 1, col_idx)
+                cell.text_frame.paragraphs[0].font.size = Pt(9)
+    
+    # Slide 7: Top 20 SKUs - YTD
+    if sku_ytd_df is not None and len(sku_ytd_df) > 0:
+        slide7 = prs.slides.add_slide(prs.slide_layouts[5])
+        title7 = slide7.shapes.title
+        title7.text = "Top 20 SKUs - YTD Performance"
+        title7.text_frame.paragraphs[0].font.size = Pt(32)
+        
+        rows = min(11, len(sku_ytd_df) + 1)
+        cols = 5
+        table = slide7.shapes.add_table(rows, cols, Inches(0.5), Inches(2), Inches(9), Inches(4.5)).table
+        
+        table.columns[0].width = Inches(0.6)
+        table.columns[1].width = Inches(1.2)
+        table.columns[2].width = Inches(3)
+        table.columns[3].width = Inches(2)
+        table.columns[4].width = Inches(2)
+        
+        headers = ['Rank', 'Code', 'Item Name', f'{target_year} YTD Sales', f'{target_year} GP%']
+        for col_idx, header in enumerate(headers):
+            cell = table.cell(0, col_idx)
+            cell.text = header
+            cell.text_frame.paragraphs[0].font.size = Pt(10)
+            cell.text_frame.paragraphs[0].font.bold = True
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = RGBColor(31, 119, 180)
+            cell.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+        
+        for idx, row in sku_ytd_df.reset_index(drop=True).head(10).iterrows():
+            table.cell(idx + 1, 0).text = str(idx + 1)
+            table.cell(idx + 1, 1).text = str(row['code'])
+            table.cell(idx + 1, 2).text = str(row['name'])[:35] + '...' if len(str(row['name'])) > 35 else str(row['name'])
+            table.cell(idx + 1, 3).text = f"${row[f'{target_year}_ytd_sales']:,.0f}"
+            table.cell(idx + 1, 4).text = f"{row[f'{target_year}_ytd_gp']:.2f}%"
+            
+            for col_idx in range(5):
+                cell = table.cell(idx + 1, col_idx)
+                cell.text_frame.paragraphs[0].font.size = Pt(9)
+    
+    # Save presentation to bytes
+    ppt_output = io.BytesIO()
+    prs.save(ppt_output)
+    ppt_output.seek(0)
+    
+    return ppt_output
+
 # Main processing
 if uploaded_file is not None:
     try:
@@ -1231,8 +1571,15 @@ if uploaded_file is not None:
                 all_items, target_month, target_year, comparison_year, month_name, 'YTD'
             )
             
+            # Generate PowerPoint presentation
+            ppt_output = create_powerpoint_presentation(
+                results_current, results_previous, target_month, target_year,
+                comparison_year, month_name, brand_mtd_df, brand_ytd_df,
+                sku_mtd_df, sku_ytd_df
+            )
+            
             # Organized download tabs
-            tab1, tab2, tab3 = st.tabs(["📊 Summary Reports", "🏆 Brand Reports", "🏷️ SKU Reports"])
+            tab1, tab2, tab3, tab4 = st.tabs(["📊 Summary Reports", "🏆 Brand Reports", "🏷️ SKU Reports", "📽️ PowerPoint"])
             
             with tab1:
                 st.markdown("### Sales Summary Report")
@@ -1308,6 +1655,30 @@ if uploaded_file is not None:
                         st.caption(f"✓ Top {len(sku_ytd_df)} SKUs by YTD sales")
                     else:
                         st.error("❌ Could not generate YTD SKU report")
+            
+            with tab4:
+                st.markdown("### 📽️ PowerPoint Presentation")
+                st.markdown("""
+                **Comprehensive slide deck including:**
+                - Executive summary with key metrics
+                - MTD vs YTD performance charts
+                - Top 10 brands analysis (MTD & YTD)
+                - Top 20 SKUs breakdown (MTD & YTD)
+                - Professional formatting and visualizations
+                """)
+                
+                if ppt_output:
+                    st.download_button(
+                        label="📥 Download PowerPoint Presentation",
+                        data=ppt_output,
+                        file_name=f"Sales_Performance_Report_{month_name}_{target_year}.pptx",
+                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        use_container_width=True
+                    )
+                    st.success("✅ PowerPoint presentation ready for download!")
+                    st.caption("Perfect for executive presentations and stakeholder meetings")
+                else:
+                    st.error("❌ Could not generate PowerPoint presentation")
             
             # Data preview section
             st.markdown("---")
