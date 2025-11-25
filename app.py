@@ -996,7 +996,14 @@ if uploaded_file is not None:
             for sheet_name in excel_file.sheet_names:
                 df = pd.read_excel(excel_file, sheet_name=sheet_name, header=9)
                 df = df.dropna(axis=1, how='all')
-                df = df.loc[:, ~df.columns.str.contains('^Unnamed', na=False)]
+
+                unnamed_cols = [col for col in df.columns if isinstance(col, str) and col.startswith('Unnamed')]
+                cols_to_drop = [col for col in unnamed_cols if df[col].isna().all()]
+                if cols_to_drop:
+                    df = df.drop(columns=cols_to_drop)
+
+                if 'Unnamed: 0' in df.columns and 'Item Number' not in df.columns:
+                    df = df.rename(columns={'Unnamed: 0': 'Item Number'})
                 dataframes[sheet_name] = df
             
             # Split by items
