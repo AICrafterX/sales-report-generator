@@ -669,6 +669,7 @@ def get_sku_code_and_name(item_df):
 
     first_row = item_df.iloc[0]
 
+    # Extract code from Item Number column
     code = ''
     for col in item_df.columns:
         col_lower = str(col).lower()
@@ -688,16 +689,40 @@ def get_sku_code_and_name(item_df):
         elif raw_value:
             code = raw_value.split()[0]
 
+    # Extract name - look through all columns for a descriptive text
     name = ''
+    # First try specific description columns
     for col in item_df.columns:
         col_lower = str(col).lower()
-        if any(key in col_lower for key in ['description', 'item name', 'item desc', 'name']):
+        if any(key in col_lower for key in ['description', 'item name', 'item desc']):
             val = first_row[col]
             if pd.notna(val):
                 val_str = str(val).strip()
                 if val_str and (not code or not val_str.upper().startswith(code.upper())):
                     name = val_str
                     break
+    
+    # If no name found, search all columns for a string that looks like a description
+    # (contains spaces and is longer than the code)
+    if not name:
+        for col in item_df.columns:
+            if col == 'Item Number':
+                continue
+            val = first_row[col]
+            if pd.notna(val):
+                val_str = str(val).strip()
+                # Check if this looks like a product description
+                if val_str and len(val_str) > 10 and ' ' in val_str and not val_str.replace('.','').replace(',','').isdigit():
+                    # Make sure it's not just the code repeated
+                    if not code or not val_str.upper().startswith(code.upper()):
+                        name = val_str
+                        break
+                    # If it starts with code, extract the remainder
+                    elif code and val_str.upper().startswith(code.upper()):
+                        remainder = val_str[len(code):].strip(' -:_')
+                        if remainder and len(remainder) > 3:
+                            name = remainder
+                            break
 
     if not name:
         raw_value = str(first_row.iloc[0]).strip()
