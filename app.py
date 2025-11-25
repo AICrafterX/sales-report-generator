@@ -15,29 +15,92 @@ from collections import defaultdict
 st.set_page_config(
     page_title="Sales Report Generator",
     page_icon="📊",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Title and description
-st.title("📊 Sales Report Generator")
+# Custom CSS for better styling
 st.markdown("""
-Upload your sales Excel file to generate a comprehensive sales summary report with visualizations.
-The app will calculate MTD and YTD metrics, compare year-over-year performance, and create professional charts.
-""")
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #1f77b4;
+        margin-bottom: 0.5rem;
+    }
+    .sub-header {
+        font-size: 1.1rem;
+        color: #666;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1rem;
+        border-radius: 10px;
+        color: white;
+    }
+    .section-divider {
+        margin: 2rem 0;
+        border-top: 2px solid #e0e0e0;
+    }
+    .download-section {
+        background-color: #f8f9fa;
+        padding: 1.5rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2rem;
+    }
+    .stTabs [data-baseweb="tab"] {
+        padding: 0.5rem 1.5rem;
+        font-weight: 600;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Header
+st.markdown('<p class="main-header">📊 Sales Report Generator</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">Comprehensive sales analytics with MTD/YTD metrics, brand performance, and SKU insights</p>', unsafe_allow_html=True)
 
 # Sidebar for configuration
-st.sidebar.header("⚙️ Configuration")
-target_month = st.sidebar.slider("Select Target Month", 1, 12, 10, help="Month for MTD calculations")
-target_year = st.sidebar.number_input("Select Target Year", 2020, 2030, 2025, help="Year for calculations")
-comparison_year = st.sidebar.number_input("Comparison Year", 2020, 2030, 2024, help="Previous year for comparison")
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    st.markdown("---")
+    
+    target_month = st.slider("📅 Target Month", 1, 12, 10, help="Month for MTD calculations")
+    target_year = st.number_input("📆 Target Year", 2020, 2030, 2025, step=1, help="Year for calculations")
+    comparison_year = st.number_input("📆 Comparison Year", 2020, 2030, 2024, step=1, help="Previous year for comparison")
+    
+    st.markdown("---")
+    st.markdown("### 📖 Instructions")
+    st.markdown("""
+    1. Upload your Excel file (.xls or .xlsx)
+    2. Review key performance metrics
+    3. Download detailed reports
+    4. Analyze brand and SKU performance
+    """)
+    
+    st.markdown("---")
+    st.markdown("### 📊 Available Reports")
+    st.markdown("""
+    - **Sales Summary**: Overall performance
+    - **Top 10 Brands**: MTD & YTD rankings
+    - **Top 20 SKUs**: Product-level insights
+    """)
 
 # Month names for display
 month_names = ["", "January", "February", "March", "April", "May", "June", 
                "July", "August", "September", "October", "November", "December"]
 month_name = month_names[target_month]
 
-# File uploader
-uploaded_file = st.file_uploader("Upload Sales Excel File (.xls or .xlsx)", type=['xls', 'xlsx'])
+# File uploader with better styling
+st.markdown("### 📁 Upload Your Data")
+uploaded_file = st.file_uploader(
+    "Choose your sales Excel file",
+    type=['xls', 'xlsx'],
+    help="Upload a .xls or .xlsx file containing your sales data"
+)
 
 def split_by_items(df):
     """Split dataframe by item numbers"""
@@ -1010,11 +1073,13 @@ if uploaded_file is not None:
             # Read Excel file
             excel_file = pd.ExcelFile(uploaded_file)
             
-            st.success(f"✅ File uploaded successfully! Found {len(excel_file.sheet_names)} sheet(s)")
-            
-            # Show available sheets
-            with st.expander("📄 Available Sheets"):
-                st.write(excel_file.sheet_names)
+            # Success message in a cleaner format
+            col_msg1, col_msg2 = st.columns([3, 1])
+            with col_msg1:
+                st.success(f"✅ File uploaded successfully! Found {len(excel_file.sheet_names)} sheet(s)")
+            with col_msg2:
+                with st.expander("📄 Sheets"):
+                    st.write(excel_file.sheet_names)
             
             # Read and process all sheets
             dataframes = {}
@@ -1039,220 +1104,219 @@ if uploaded_file is not None:
                     key = f"{sheet_name}_{item_num}"
                     all_items[key] = item_df
             
-            st.info(f"📦 Extracted {len(all_items)} items from the file")
+            # Info badge
+            st.markdown(f"""
+            <div style='background-color: #e7f3ff; padding: 0.8rem; border-radius: 8px; margin: 1rem 0;'>
+                📦 <b>Extracted {len(all_items)} items</b> from {len(excel_file.sheet_names)} sheet(s)
+            </div>
+            """, unsafe_allow_html=True)
             
             # Calculate metrics
             results_current = calculate_sales_metrics(all_items, target_month, target_year)
             results_previous = calculate_sales_metrics(all_items, target_month, comparison_year)
             
-            # Display results
-            st.header(f"📊 Sales Summary - {month_name} {target_year}")
+            # Display results with improved layout
+            st.markdown("---")
+            st.markdown(f"## � Performance Overview - {month_name} {target_year}")
             
-            # Create columns for metrics
+            # Key metrics in cards
             col1, col2, col3, col4 = st.columns(4)
+            
+            mtd_change = ((results_current['MTD Gross Sales'] / results_previous['MTD Gross Sales'] - 1) * 100) if results_previous['MTD Gross Sales'] > 0 else 0
+            ytd_change = ((results_current['YTD Gross Sales'] / results_previous['YTD Gross Sales'] - 1) * 100) if results_previous['YTD Gross Sales'] > 0 else 0
+            mtd_gp_change = results_current['MTD GP%'] - results_previous['MTD GP%']
+            ytd_gp_change = results_current['YTD GP%'] - results_previous['YTD GP%']
             
             with col1:
                 st.metric(
-                    "MTD Gross Sales", 
-                    f"${results_current['MTD Gross Sales']:,.2f}",
-                    f"{((results_current['MTD Gross Sales'] / results_previous['MTD Gross Sales'] - 1) * 100):.1f}%" if results_previous['MTD Gross Sales'] > 0 else "N/A"
+                    "💰 MTD Gross Sales", 
+                    f"${results_current['MTD Gross Sales']:,.0f}",
+                    f"{mtd_change:+.1f}%" if mtd_change != 0 else "0%",
+                    delta_color="normal"
                 )
             
             with col2:
                 st.metric(
-                    "MTD GP%", 
+                    "📊 MTD GP%", 
                     f"{results_current['MTD GP%']:.2f}%",
-                    f"{(results_current['MTD GP%'] - results_previous['MTD GP%']):.2f}%"
+                    f"{mtd_gp_change:+.2f}%",
+                    delta_color="normal"
                 )
             
             with col3:
                 st.metric(
-                    "YTD Gross Sales", 
-                    f"${results_current['YTD Gross Sales']:,.2f}",
-                    f"{((results_current['YTD Gross Sales'] / results_previous['YTD Gross Sales'] - 1) * 100):.1f}%" if results_previous['YTD Gross Sales'] > 0 else "N/A"
+                    "💵 YTD Gross Sales", 
+                    f"${results_current['YTD Gross Sales']:,.0f}",
+                    f"{ytd_change:+.1f}%" if ytd_change != 0 else "0%",
+                    delta_color="normal"
                 )
             
             with col4:
                 st.metric(
-                    "YTD GP%", 
+                    "📈 YTD GP%", 
                     f"{results_current['YTD GP%']:.2f}%",
-                    f"{(results_current['YTD GP%'] - results_previous['YTD GP%']):.2f}%"
+                    f"{ytd_gp_change:+.2f}%",
+                    delta_color="normal"
                 )
             
-            # Create summary table
-            st.subheader("📋 Detailed Summary Table")
-            
-            mtd_achieved = (results_current['MTD Gross Sales'] / results_previous['MTD Gross Sales'] * 100) if results_previous['MTD Gross Sales'] > 0 else 0
-            ytd_achieved = (results_current['YTD Gross Sales'] / results_previous['YTD Gross Sales'] * 100) if results_previous['YTD Gross Sales'] > 0 else 0
-            mtd_gp_achieved = "0%" if results_previous['MTD GP%'] == 0 else f"{(results_current['MTD GP%'] / results_previous['MTD GP%'] * 100):.0f}%"
-            ytd_gp_achieved = "0%" if results_previous['YTD GP%'] == 0 else f"{(results_current['YTD GP%'] / results_previous['YTD GP%'] * 100):.0f}%"
-            
-            summary_data = {
-                'Date': [str(target_year), str(comparison_year), '%Achieved', f'{target_year} Budget', '% Achieved'],
-                'MTD Gross Sales': [
-                    f"$ {results_current['MTD Gross Sales']:,.2f}",
-                    f"$ {results_previous['MTD Gross Sales']:,.2f}",
-                    f"{mtd_achieved:.0f}%",
-                    "",
-                    "0%"
-                ],
-                'MTD GP%': [
-                    f"{results_current['MTD GP%']:.2f}%",
-                    f"{results_previous['MTD GP%']:.2f}%",
-                    mtd_gp_achieved,
-                    "",
-                    "0%"
-                ],
-                'YTD Gross Sales': [
-                    f"$ {results_current['YTD Gross Sales']:,.2f}",
-                    f"$ {results_previous['YTD Gross Sales']:,.2f}",
-                    f"{ytd_achieved:.0f}%",
-                    "",
-                    "0%"
-                ],
-                'YTD GP%': [
-                    f"{results_current['YTD GP%']:.2f}%",
-                    f"{results_previous['YTD GP%']:.2f}%",
-                    ytd_gp_achieved,
-                    "",
-                    "0%"
-                ]
-            }
-            
-            summary_df = pd.DataFrame(summary_data)
-            st.dataframe(summary_df, use_container_width=True)
-            
-            # Generate Excel reports
-            st.subheader("📥 Download Reports")
-            
-            # First row: Summary and Brand reports
-            st.markdown("### 📊 Summary & Brand Reports")
-            col_download1, col_download2, col_download3 = st.columns(3)
-            
-            with col_download1:
-                st.markdown("#### Sales Summary Report")
-                excel_output = create_excel_report(
-                    results_current, 
-                    results_previous, 
-                    target_month, 
-                    target_year, 
-                    comparison_year,
-                    month_name
-                )
+            # Detailed comparison table in expander
+            with st.expander("📋 View Detailed Comparison Table", expanded=False):
+                mtd_achieved = (results_current['MTD Gross Sales'] / results_previous['MTD Gross Sales'] * 100) if results_previous['MTD Gross Sales'] > 0 else 0
+                ytd_achieved = (results_current['YTD Gross Sales'] / results_previous['YTD Gross Sales'] * 100) if results_previous['YTD Gross Sales'] > 0 else 0
+                mtd_gp_achieved = "0%" if results_previous['MTD GP%'] == 0 else f"{(results_current['MTD GP%'] / results_previous['MTD GP%'] * 100):.0f}%"
+                ytd_gp_achieved = "0%" if results_previous['YTD GP%'] == 0 else f"{(results_current['YTD GP%'] / results_previous['YTD GP%'] * 100):.0f}%"
                 
+                summary_data = {
+                    'Period': [str(target_year), str(comparison_year), '% Achieved', f'{target_year} Budget', '% vs Budget'],
+                    'MTD Gross Sales': [
+                        f"$ {results_current['MTD Gross Sales']:,.2f}",
+                        f"$ {results_previous['MTD Gross Sales']:,.2f}",
+                        f"{mtd_achieved:.0f}%",
+                        "",
+                        "0%"
+                    ],
+                    'MTD GP%': [
+                        f"{results_current['MTD GP%']:.2f}%",
+                        f"{results_previous['MTD GP%']:.2f}%",
+                        mtd_gp_achieved,
+                        "",
+                        "0%"
+                    ],
+                    'YTD Gross Sales': [
+                        f"$ {results_current['YTD Gross Sales']:,.2f}",
+                        f"$ {results_previous['YTD Gross Sales']:,.2f}",
+                        f"{ytd_achieved:.0f}%",
+                        "",
+                        "0%"
+                    ],
+                    'YTD GP%': [
+                        f"{results_current['YTD GP%']:.2f}%",
+                        f"{results_previous['YTD GP%']:.2f}%",
+                        ytd_gp_achieved,
+                        "",
+                        "0%"
+                    ]
+                }
+                
+                summary_df = pd.DataFrame(summary_data)
+                st.dataframe(summary_df, use_container_width=True, hide_index=True)
+            
+            # Download reports section with better organization
+            st.markdown("---")
+            st.markdown("## 📥 Download Reports")
+            
+            # Generate all reports first
+            excel_output = create_excel_report(
+                results_current, 
+                results_previous, 
+                target_month, 
+                target_year, 
+                comparison_year,
+                month_name
+            )
+            
+            brand_mtd_output, brand_mtd_df, total_brands = create_brand_report(
+                all_items, target_month, target_year, comparison_year, month_name, 'MTD'
+            )
+            
+            brand_ytd_output, brand_ytd_df, _ = create_brand_report(
+                all_items, target_month, target_year, comparison_year, month_name, 'YTD'
+            )
+            
+            sku_mtd_output, sku_mtd_df = create_sku_report(
+                all_items, target_month, target_year, comparison_year, month_name, 'MTD'
+            )
+            
+            sku_ytd_output, sku_ytd_df = create_sku_report(
+                all_items, target_month, target_year, comparison_year, month_name, 'YTD'
+            )
+            
+            # Organized download tabs
+            tab1, tab2, tab3 = st.tabs(["📊 Summary Reports", "🏆 Brand Reports", "🏷️ SKU Reports"])
+            
+            with tab1:
+                st.markdown("### Sales Summary Report")
+                st.markdown("Complete overview with MTD/YTD metrics, charts, and year-over-year comparisons")
                 st.download_button(
-                    label="📥 Sales Summary",
+                    label="📥 Download Sales Summary Report",
                     data=excel_output,
                     file_name=f"Sales_Summary_Report_{month_name}_{target_year}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
-                st.caption("Summary table & charts")
             
-            with col_download2:
-                st.markdown("#### Top 10 MTD Brands")
-                brand_mtd_output, brand_mtd_df, total_brands = create_brand_report(
-                    all_items,
-                    target_month,
-                    target_year,
-                    comparison_year,
-                    month_name,
-                    'MTD'
-                )
+            with tab2:
+                st.markdown("### Top 10 Brand Performance")
+                col_b1, col_b2 = st.columns(2)
                 
-                if brand_mtd_output:
-                    st.download_button(
-                        label="📥 Top 10 MTD Brands",
-                        data=brand_mtd_output,
-                        file_name=f"Top10_Brand_MTD_Report_{month_name}_{target_year}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-                    st.caption(f"Top {len(brand_mtd_df)} by MTD sales")
-                else:
-                    st.warning("Could not generate MTD brand report")
-                    total_brands = 0
-            
-            with col_download3:
-                st.markdown("#### Top 10 YTD Brands")
-                brand_ytd_output, brand_ytd_df, _ = create_brand_report(
-                    all_items,
-                    target_month,
-                    target_year,
-                    comparison_year,
-                    month_name,
-                    'YTD'
-                )
+                with col_b1:
+                    st.markdown("#### 📈 MTD Brands")
+                    if brand_mtd_output:
+                        st.download_button(
+                            label=f"📥 Download MTD Report ({len(brand_mtd_df)} brands)",
+                            data=brand_mtd_output,
+                            file_name=f"Top10_Brand_MTD_Report_{month_name}_{target_year}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
+                        st.caption(f"✓ Top {len(brand_mtd_df)} brands by MTD sales")
+                    else:
+                        st.error("❌ Could not generate MTD brand report")
                 
-                if brand_ytd_output:
-                    st.download_button(
-                        label="📥 Top 10 YTD Brands",
-                        data=brand_ytd_output,
-                        file_name=f"Top10_Brand_YTD_Report_{month_name}_{target_year}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-                    st.caption(f"Top {len(brand_ytd_df)} by YTD sales")
-                else:
-                    st.warning("Could not generate YTD brand report")
+                with col_b2:
+                    st.markdown("#### 📊 YTD Brands")
+                    if brand_ytd_output:
+                        st.download_button(
+                            label=f"📥 Download YTD Report ({len(brand_ytd_df)} brands)",
+                            data=brand_ytd_output,
+                            file_name=f"Top10_Brand_YTD_Report_{month_name}_{target_year}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
+                        st.caption(f"✓ Top {len(brand_ytd_df)} brands by YTD sales")
+                    else:
+                        st.error("❌ Could not generate YTD brand report")
             
-            # Second row: SKU reports
-            st.markdown("### 🏷️ SKU Performance Reports")
-            col_download4, col_download5, col_empty = st.columns(3)
-            
-            with col_download4:
-                st.markdown("#### Top 20 MTD SKUs")
-                sku_mtd_output, sku_mtd_df = create_sku_report(
-                    all_items,
-                    target_month,
-                    target_year,
-                    comparison_year,
-                    month_name,
-                    'MTD'
-                )
+            with tab3:
+                st.markdown("### Top 20 SKU Performance")
+                col_s1, col_s2 = st.columns(2)
                 
-                if sku_mtd_output:
-                    st.download_button(
-                        label="📥 Top 20 MTD SKUs",
-                        data=sku_mtd_output,
-                        file_name=f"Top20_SKU_MTD_Report_{month_name}_{target_year}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-                    st.caption(f"Top {len(sku_mtd_df)} SKUs by MTD sales")
-                else:
-                    st.warning("Could not generate MTD SKU report")
-            
-            with col_download5:
-                st.markdown("#### Top 20 YTD SKUs")
-                sku_ytd_output, sku_ytd_df = create_sku_report(
-                    all_items,
-                    target_month,
-                    target_year,
-                    comparison_year,
-                    month_name,
-                    'YTD'
-                )
+                with col_s1:
+                    st.markdown("#### 📈 MTD SKUs")
+                    if sku_mtd_output:
+                        st.download_button(
+                            label=f"📥 Download MTD Report ({len(sku_mtd_df)} SKUs)",
+                            data=sku_mtd_output,
+                            file_name=f"Top20_SKU_MTD_Report_{month_name}_{target_year}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
+                        st.caption(f"✓ Top {len(sku_mtd_df)} SKUs by MTD sales")
+                    else:
+                        st.error("❌ Could not generate MTD SKU report")
                 
-                if sku_ytd_output:
-                    st.download_button(
-                        label="📥 Top 20 YTD SKUs",
-                        data=sku_ytd_output,
-                        file_name=f"Top20_SKU_YTD_Report_{month_name}_{target_year}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-                    st.caption(f"Top {len(sku_ytd_df)} SKUs by YTD sales")
-                else:
-                    st.warning("Could not generate YTD SKU report")
+                with col_s2:
+                    st.markdown("#### 📊 YTD SKUs")
+                    if sku_ytd_output:
+                        st.download_button(
+                            label=f"📥 Download YTD Report ({len(sku_ytd_df)} SKUs)",
+                            data=sku_ytd_output,
+                            file_name=f"Top20_SKU_YTD_Report_{month_name}_{target_year}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
+                        st.caption(f"✓ Top {len(sku_ytd_df)} SKUs by YTD sales")
+                    else:
+                        st.error("❌ Could not generate YTD SKU report")
             
-            st.success("✅ All reports generated successfully! Click the buttons above to download.")
+            # Data preview section
+            st.markdown("---")
+            st.markdown("## 🔍 Data Preview")
             
-            # Show brand summary previews
             if brand_mtd_output:
-                st.subheader("🏆 Top 10 Brands Preview")
+                st.markdown("### 🏆 Top 10 Brands")
                 
-                tab1, tab2 = st.tabs(["MTD Performance", "YTD Performance"])
+                tab1, tab2 = st.tabs(["📈 MTD Performance", "📊 YTD Performance"])
                 
                 with tab1:
                     preview_mtd = []
@@ -1287,11 +1351,11 @@ if uploaded_file is not None:
                         preview_ytd_df = pd.DataFrame(preview_ytd)
                         st.dataframe(preview_ytd_df, use_container_width=True, hide_index=True)
             
-            # Show SKU summary previews
+            # SKU previews
             if sku_mtd_output:
-                st.subheader("🏷️ Top 20 SKUs Preview")
+                st.markdown("### 🏷️ Top 20 SKUs")
                 
-                tab3, tab4 = st.tabs(["MTD SKU Performance", "YTD SKU Performance"])
+                tab3, tab4 = st.tabs(["📈 MTD SKU Performance", "📊 YTD SKU Performance"])
                 
                 with tab3:
                     preview_sku_mtd = []
