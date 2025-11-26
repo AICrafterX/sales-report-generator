@@ -79,10 +79,11 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 📖 Instructions")
     st.markdown("""
-    1. Upload your Excel file (.xls or .xlsx)
-    2. Review key performance metrics
-    3. Download detailed reports
-    4. Analyze brand and SKU performance
+    1. Upload your Sales Summary Excel file
+    2. Upload your ItemMaster Excel file (required)
+    3. Review key performance metrics
+    4. Download detailed reports
+    5. Analyze brand and SKU performance
     """)
     
     st.markdown("---")
@@ -113,9 +114,9 @@ with col_upload1:
 
 with col_upload2:
     brand_mapping_file = st.file_uploader(
-        "📋 Brand Mapping File (Optional)",
+        "📋 ItemMaster File (Required)",
         type=['xls', 'xlsx'],
-        help="Upload the NZ Sales Act + Fcst file containing ItemMaster sheet for brand names",
+        help="Upload the ItemMaster Excel file containing ItemId and Brand columns. Required for accurate brand identification.",
         key="brand_file"
     )
 
@@ -133,26 +134,13 @@ def title_case_brand(brand_name):
     return ' '.join(word.capitalize() for word in str(brand_name).strip().split())
 
 def load_brand_mapping(brand_file):
-    """Load brand mapping from ItemMaster sheet in the brand mapping file"""
+    """Load brand mapping from ItemMaster Excel file (uploaded directly by user)"""
     brand_map = {}  # ItemID -> Brand name
     brand_normalized_map = {}  # Normalized brand -> Canonical brand name
     
     try:
-        excel_file = pd.ExcelFile(brand_file)
-        
-        # Look for ItemMaster sheet (case-insensitive)
-        item_master_sheet = None
-        for sheet in excel_file.sheet_names:
-            if sheet.lower() == 'itemmaster':
-                item_master_sheet = sheet
-                break
-        
-        if item_master_sheet is None:
-            st.warning("⚠️ ItemMaster sheet not found in the brand mapping file")
-            return brand_map, brand_normalized_map
-        
-        # Read the ItemMaster sheet
-        df = pd.read_excel(excel_file, sheet_name=item_master_sheet)
+        # Read the ItemMaster file directly (user uploads this file)
+        df = pd.read_excel(brand_file)
         
         # Find ItemId and Brand columns (based on actual file structure)
         item_id_col = None
@@ -166,7 +154,7 @@ def load_brand_mapping(brand_file):
                 brand_col = col
         
         if item_id_col is None or brand_col is None:
-            st.warning(f"⚠️ Could not find ItemId or Brand columns in ItemMaster sheet. Found columns: {list(df.columns)}")
+            st.warning(f"⚠️ Could not find ItemId or Brand columns in the uploaded file. Found columns: {list(df.columns)}")
             return brand_map, brand_normalized_map
         
         # Build mapping: ItemID -> Brand (with Title Case)
@@ -187,7 +175,7 @@ def load_brand_mapping(brand_file):
                 
                 brand_map[item_id.upper()] = title_brand
         
-        st.success(f"✅ Loaded {len(brand_map)} brand mappings from ItemMaster ({len(brand_normalized_map)} unique brands)")
+        st.success(f"✅ Loaded {len(brand_map)} brand mappings ({len(brand_normalized_map)} unique brands)")
         
     except Exception as e:
         st.warning(f"⚠️ Error loading brand mapping: {str(e)}")
@@ -899,17 +887,22 @@ def get_sku_code_and_name(item_df):
     return code.strip(), name.strip()
 
 def create_brand_report(all_items, target_month, target_year, comparison_year, month_name, report_type='MTD', brand_mapping=None, brand_normalized_map=None):
-    """Create Top-10 Brand MTD or YTD Performance report (excludes MX brand)"""
+    """Create Top-10 Brand MTD or YTD Performance report (excludes MX brand)
+    
+    Requires brand_mapping from ItemMaster sheet for accurate brand identification.
+    Items without brand mapping are skipped.
+    """
     
     if brand_mapping is None:
         brand_mapping = {}
     if brand_normalized_map is None:
         brand_normalized_map = {}
     
-    # Group items by brand name from mapping, or by brand code if not mapped
+    # Group items by brand name from mapping
     # Use normalized names for grouping to handle variations like "SunRice", "Sun Rice", "Sunrice"
     brands = defaultdict(list)
     brand_display_names = {}  # normalized_name -> display_name (Title Case)
+    skipped_items = 0
     
     for item_key, item_df in all_items.items():
         # Extract item code from item_key (format: "SheetName_ItemCode")
@@ -923,9 +916,10 @@ def create_brand_report(all_items, target_month, target_year, comparison_year, m
         # Look up brand name from mapping using item code
         brand_name = brand_mapping.get(item_code, None)
         
-        # If not found, fallback to brand code with Title Case
+        # Skip items without brand mapping - no fallback to first 3 letters
         if not brand_name:
-            brand_name = title_case_brand(brand_code)
+            skipped_items += 1
+            continue
         
         # Normalize the brand name for grouping (handles SunRice, Sun Rice, Sunrice as same)
         normalized_brand = normalize_brand_name(brand_name)
@@ -1582,6 +1576,11 @@ def create_powerpoint_presentation(results_current, results_previous, target_mon
 
 # Main processing
 if uploaded_file is not None:
+    # Check if brand mapping file is uploaded
+    if brand_mapping_file is None:
+        st.warning("⚠️ **ItemMaster File Required**: Please upload the ItemMaster Excel file to generate brand reports. This is required because different brands may share the same first 3 letters in item numbers.")
+        st.stop()
+    
     try:
         with st.spinner("Processing your file..."):
             # Read Excel file
@@ -1943,24 +1942,34 @@ if uploaded_file is not None:
         st.error(f"❌ Error processing file: {str(e)}")
         st.exception(e)
 else:
-    st.info("👆 Please upload an Excel file to get started")
+    st.info("👆 Please upload both required Excel files to get started")
     
     # Show sample information
     with st.expander("ℹ️ How to use this app"):
         st.markdown("""
         ### Instructions:
-        1. **Upload your Excel file** (.xls or .xlsx format)
-        2. **Configure settings** in the sidebar:
+        1. **Upload your Sales Summary file** (.xls or .xlsx format)
+        2. **Upload your ItemMaster file** (.xls or .xlsx format) - **Required**
+           - This file should have "ItemId" and "Brand" columns
+           - This is required for accurate brand identification in Top 10 Brands reports
+        3. **Configure settings** in the sidebar:
            - Select target month for MTD calculations
            - Select target year for current data
            - Select comparison year for year-over-year analysis
-        3. **View the results** in the dashboard
-        4. **Download** the generated Excel report with:
+        4. **View the results** in the dashboard
+        5. **Download** the generated reports including:
            - Formatted summary table
            - Dashboard chart (4-panel visualization)
-           - Comparison chart (year-over-year)
+           - Top 10 Brands reports (MTD & YTD)
+           - Top 20 SKUs reports (MTD & YTD)
+           - PowerPoint presentation
         
-        ### Expected File Format:
+        ### Why is ItemMaster File Required?
+        Different brands may share the same first 3 letters in their item numbers, 
+        making it unreliable to identify brands by item codes alone. The ItemMaster 
+        file provides accurate brand-to-item mappings for precise reporting.
+        
+        ### Expected Sales Summary File Format:
         - Header row should be at row 9 (0-indexed)
         - Should contain columns: Year, Period, Sales Amount, Cost of Sales
         - Items identified by alphanumeric codes
