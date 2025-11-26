@@ -81,9 +81,10 @@ with st.sidebar:
     st.markdown("""
     1. Upload your Sales Summary Excel file
     2. Upload your ItemMaster Excel file (required)
-    3. Review key performance metrics
-    4. Download detailed reports
-    5. Analyze brand and SKU performance
+    3. (Optional) Upload Sales Details & Customer List
+    4. Review key performance metrics
+    5. Download detailed reports
+    6. Analyze brand, SKU, and customer performance
     """)
     
     st.markdown("---")
@@ -92,6 +93,7 @@ with st.sidebar:
     - **Sales Summary**: Overall performance
     - **Top 10 Brands**: MTD & YTD rankings
     - **Top 20 SKUs**: Product-level insights
+    - **Customer Channel**: Top 10 by channel (optional)
     """)
 
 # Month names for display
@@ -102,6 +104,7 @@ month_name = month_names[target_month]
 # File uploader with better styling
 st.markdown("### 📁 Upload Your Data")
 
+# Primary files (Sales Summary and ItemMaster)
 col_upload1, col_upload2 = st.columns(2)
 
 with col_upload1:
@@ -118,6 +121,25 @@ with col_upload2:
         type=['xls', 'xlsx'],
         help="Upload the ItemMaster Excel file containing ItemId and Brand columns. Required for accurate brand identification.",
         key="brand_file"
+    )
+
+# Additional required files for Customer Channel Report
+col_upload3, col_upload4 = st.columns(2)
+
+with col_upload3:
+    sales_details_file = st.file_uploader(
+        "📋 Sales Details File (Required)",
+        type=['xls', 'xlsx'],
+        help="Upload the Sales Details Excel file (e.g., sales detail 2024-2025.xls). Contains detailed transaction data.",
+        key="sales_details_file"
+    )
+
+with col_upload4:
+    customer_list_file = st.file_uploader(
+        "👥 Sales Customer List File (Required)",
+        type=['xls', 'xlsx'],
+        help="Upload the SalesCustomerList Excel file with Channel column. Maps customers to their sales channels.",
+        key="customer_list_file"
     )
 
 def normalize_brand_name(brand_name):
@@ -1160,7 +1182,7 @@ def create_brand_report(all_items, target_month, target_year, comparison_year, m
 
 def create_powerpoint_presentation(results_current, results_previous, target_month, target_year, 
                                    comparison_year, month_name, brand_mtd_df, brand_ytd_df, 
-                                   sku_mtd_df, sku_ytd_df):
+                                   sku_mtd_df, sku_ytd_df, channel_results=None, sales_rep_results=None):
     """Create a comprehensive PowerPoint presentation with all sales insights"""
     
     prs = Presentation()
@@ -1567,6 +1589,172 @@ def create_powerpoint_presentation(results_current, results_previous, target_mon
                     cell = table.cell(row_num, col_idx)
                     cell.text_frame.paragraphs[0].font.size = Pt(9)
     
+    # Slide: Channel Sales Performance
+    if channel_results is not None:
+        prev_year = target_year - 1
+        channel_col = channel_results['channel_col']
+        channel_metrics = channel_results['channel_metrics']
+        
+        # Filter out Unknown channels
+        valid_channels = channel_metrics[channel_metrics[channel_col] != 'Unknown']
+        
+        if len(valid_channels) > 0:
+            slide_channel = prs.slides.add_slide(prs.slide_layouts[5])
+            title_channel = slide_channel.shapes.title
+            title_channel.text = "Channel Sales Performance"
+            title_channel.text_frame.paragraphs[0].font.size = Pt(32)
+            title_channel.text_frame.paragraphs[0].font.color.rgb = RGBColor(31, 119, 180)
+            
+            # Create table for channel metrics
+            rows = min(len(valid_channels) + 2, 12)  # Header + data + total (max 12 rows)
+            cols = 7
+            left = Inches(0.3)
+            top = Inches(1.8)
+            width = Inches(9.4)
+            height = Inches(5)
+            
+            table = slide_channel.shapes.add_table(rows, cols, left, top, width, height).table
+            
+            # Set column widths
+            table.columns[0].width = Inches(1.8)
+            table.columns[1].width = Inches(0.9)
+            table.columns[2].width = Inches(1.4)
+            table.columns[3].width = Inches(1.4)
+            table.columns[4].width = Inches(0.9)
+            table.columns[5].width = Inches(1.5)
+            table.columns[6].width = Inches(1.5)
+            
+            # Header
+            headers = ['Channel', 'Customers', f'{target_year} MTD', f'{prev_year} MTD', 'MTD %', f'{target_year} YTD', f'{prev_year} YTD']
+            for col_idx, header in enumerate(headers):
+                cell = table.cell(0, col_idx)
+                cell.text = header
+                cell.text_frame.paragraphs[0].font.size = Pt(10)
+                cell.text_frame.paragraphs[0].font.bold = True
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor(31, 119, 180)
+                cell.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+                cell.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+            
+            # Data rows
+            for idx, (_, ch_row) in enumerate(valid_channels.head(9).iterrows()):
+                row_num = idx + 1
+                table.cell(row_num, 0).text = str(ch_row[channel_col])[:20]
+                table.cell(row_num, 1).text = str(int(ch_row['Customer_Count']))
+                table.cell(row_num, 2).text = f"${ch_row[f'{target_year}_MTD_Sales']:,.0f}"
+                table.cell(row_num, 3).text = f"${ch_row[f'{prev_year}_MTD_Sales']:,.0f}"
+                table.cell(row_num, 4).text = f"{ch_row['MTD_Achieved_%']:.1f}%"
+                table.cell(row_num, 5).text = f"${ch_row[f'{target_year}_YTD_Sales']:,.0f}"
+                table.cell(row_num, 6).text = f"${ch_row[f'{prev_year}_YTD_Sales']:,.0f}"
+                
+                for col_idx in range(7):
+                    cell = table.cell(row_num, col_idx)
+                    cell.text_frame.paragraphs[0].font.size = Pt(9)
+                    cell.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+            
+            # Grand Total row
+            gt = channel_results['grand_total']
+            total_row = min(len(valid_channels.head(9)) + 1, 10)
+            
+            table.cell(total_row, 0).text = "GRAND TOTAL"
+            table.cell(total_row, 1).text = str(gt['Customer_Count'])
+            table.cell(total_row, 2).text = f"${gt[f'{target_year}_MTD_Sales']:,.0f}"
+            table.cell(total_row, 3).text = f"${gt[f'{prev_year}_MTD_Sales']:,.0f}"
+            table.cell(total_row, 4).text = f"{gt['MTD_Achieved_%']:.1f}%"
+            table.cell(total_row, 5).text = f"${gt[f'{target_year}_YTD_Sales']:,.0f}"
+            table.cell(total_row, 6).text = f"${gt[f'{prev_year}_YTD_Sales']:,.0f}"
+            
+            for col_idx in range(7):
+                cell = table.cell(total_row, col_idx)
+                cell.text_frame.paragraphs[0].font.size = Pt(9)
+                cell.text_frame.paragraphs[0].font.bold = True
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor(221, 235, 247)
+                cell.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+    
+    # Slide: Sales Rep Performance
+    if sales_rep_results is not None:
+        prev_year = target_year - 1
+        rep_col = sales_rep_results['sales_rep_col']
+        rep_metrics = sales_rep_results['sales_rep_metrics']
+        
+        # Filter out Unassigned reps
+        valid_reps = rep_metrics[rep_metrics[rep_col] != 'Unassigned']
+        
+        if len(valid_reps) > 0:
+            slide_rep = prs.slides.add_slide(prs.slide_layouts[5])
+            title_rep = slide_rep.shapes.title
+            title_rep.text = "Sales Rep Performance"
+            title_rep.text_frame.paragraphs[0].font.size = Pt(32)
+            title_rep.text_frame.paragraphs[0].font.color.rgb = RGBColor(31, 119, 180)
+            
+            # Create table for sales rep metrics
+            rows = min(len(valid_reps) + 2, 12)  # Header + data + total (max 12 rows)
+            cols = 7
+            left = Inches(0.3)
+            top = Inches(1.8)
+            width = Inches(9.4)
+            height = Inches(5)
+            
+            table = slide_rep.shapes.add_table(rows, cols, left, top, width, height).table
+            
+            # Set column widths
+            table.columns[0].width = Inches(1.8)
+            table.columns[1].width = Inches(0.9)
+            table.columns[2].width = Inches(1.4)
+            table.columns[3].width = Inches(1.4)
+            table.columns[4].width = Inches(0.9)
+            table.columns[5].width = Inches(1.5)
+            table.columns[6].width = Inches(1.5)
+            
+            # Header
+            headers = ['Sales Rep', 'Customers', f'{target_year} MTD', f'{prev_year} MTD', 'MTD %', f'{target_year} YTD', f'{prev_year} YTD']
+            for col_idx, header in enumerate(headers):
+                cell = table.cell(0, col_idx)
+                cell.text = header
+                cell.text_frame.paragraphs[0].font.size = Pt(10)
+                cell.text_frame.paragraphs[0].font.bold = True
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor(31, 119, 180)
+                cell.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+                cell.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+            
+            # Data rows
+            for idx, (_, rep_row) in enumerate(valid_reps.head(9).iterrows()):
+                row_num = idx + 1
+                table.cell(row_num, 0).text = str(rep_row[rep_col])[:20]
+                table.cell(row_num, 1).text = str(int(rep_row['Customer_Count']))
+                table.cell(row_num, 2).text = f"${rep_row[f'{target_year}_MTD_Sales']:,.0f}"
+                table.cell(row_num, 3).text = f"${rep_row[f'{prev_year}_MTD_Sales']:,.0f}"
+                table.cell(row_num, 4).text = f"{rep_row['MTD_Achieved_%']:.1f}%"
+                table.cell(row_num, 5).text = f"${rep_row[f'{target_year}_YTD_Sales']:,.0f}"
+                table.cell(row_num, 6).text = f"${rep_row[f'{prev_year}_YTD_Sales']:,.0f}"
+                
+                for col_idx in range(7):
+                    cell = table.cell(row_num, col_idx)
+                    cell.text_frame.paragraphs[0].font.size = Pt(9)
+                    cell.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+            
+            # Grand Total row
+            gt_rep = sales_rep_results['grand_total']
+            total_row = min(len(valid_reps.head(9)) + 1, 10)
+            
+            table.cell(total_row, 0).text = "GRAND TOTAL"
+            table.cell(total_row, 1).text = str(gt_rep['Customer_Count'])
+            table.cell(total_row, 2).text = f"${gt_rep[f'{target_year}_MTD_Sales']:,.0f}"
+            table.cell(total_row, 3).text = f"${gt_rep[f'{prev_year}_MTD_Sales']:,.0f}"
+            table.cell(total_row, 4).text = f"{gt_rep['MTD_Achieved_%']:.1f}%"
+            table.cell(total_row, 5).text = f"${gt_rep[f'{target_year}_YTD_Sales']:,.0f}"
+            table.cell(total_row, 6).text = f"${gt_rep[f'{prev_year}_YTD_Sales']:,.0f}"
+            
+            for col_idx in range(7):
+                cell = table.cell(total_row, col_idx)
+                cell.text_frame.paragraphs[0].font.size = Pt(9)
+                cell.text_frame.paragraphs[0].font.bold = True
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor(221, 235, 247)
+                cell.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+    
     # Save presentation to bytes
     ppt_output = io.BytesIO()
     prs.save(ppt_output)
@@ -1574,11 +1762,1223 @@ def create_powerpoint_presentation(results_current, results_previous, target_mon
     
     return ppt_output
 
+
+def generate_top10_customers_by_channel(
+    sales_file,
+    customer_list_file,
+    target_month: int,
+    target_year: int
+) -> dict:
+    """
+    Generate Top 10 Customer performance reports by Channel for both MTD and YTD.
+    Also calculates MTD/YTD totals for each Channel.
+    
+    Args:
+        sales_file: Uploaded sales details Excel file object
+        customer_list_file: Uploaded SalesCustomerList Excel file object
+        target_month: Month for MTD calculation
+        target_year: Year for calculations
+    
+    Returns:
+        Dictionary with channel-wise top 10 customer data for MTD and YTD,
+        plus channel totals
+    """
+    prev_year = target_year - 1
+    
+    # ============================================================
+    # STEP 1: Parse sales data
+    # ============================================================
+    df_raw = pd.read_excel(sales_file, header=None)
+    
+    col_period = 1
+    col_sales_amount = 17
+    
+    data_rows = []
+    current_customer = None
+    current_customer_name = None
+    
+    for idx in range(11, len(df_raw)):
+        row = df_raw.iloc[idx]
+        first_cell = row.iloc[0]
+        
+        if pd.isna(first_cell):
+            continue
+        
+        first_cell_str = str(first_cell).strip()
+        
+        if first_cell_str and not first_cell_str.isdigit() and not first_cell_str.startswith('Item'):
+            if any(c.isalpha() for c in first_cell_str) and any(c.isdigit() for c in first_cell_str):
+                current_customer = first_cell_str
+                cust_name = row.iloc[7] if pd.notna(row.iloc[7]) else ''
+                current_customer_name = str(cust_name).strip() if cust_name else current_customer
+                continue
+        
+        if first_cell_str.isdigit() and len(first_cell_str) == 4:
+            year = int(first_cell_str)
+            
+            period_cell = row.iloc[col_period]
+            month = None
+            if pd.notna(period_cell):
+                try:
+                    month = int(float(period_cell))
+                except (ValueError, TypeError):
+                    month = None
+            
+            sales_amount = row.iloc[col_sales_amount]
+            
+            if pd.notna(sales_amount) and current_customer and month is not None:
+                try:
+                    sales_value = float(sales_amount)
+                    data_rows.append({
+                        'Customer #': current_customer,
+                        'Customer Name': current_customer_name,
+                        'Year': year,
+                        'Month': month,
+                        'Sales Amount': sales_value
+                    })
+                except (ValueError, TypeError):
+                    pass
+    
+    df_sales = pd.DataFrame(data_rows)
+    
+    if df_sales.empty:
+        return None
+    
+    # ============================================================
+    # STEP 2: Join with customer list to get Channel
+    # ============================================================
+    customer_df = pd.read_excel(customer_list_file)
+    
+    # Find Channel and Sales Rep columns
+    channel_col = None
+    sales_rep_col = None
+    for col in customer_df.columns:
+        if 'channel' in col.lower():
+            channel_col = col
+        if 'sales' in col.lower() and 'rep' in col.lower():
+            sales_rep_col = col
+    
+    if not channel_col:
+        st.warning("⚠️ Channel column not found in customer list!")
+        return None
+    
+    # Create lookup for customer -> channel/sales rep
+    customer_cols = ['Customer #', channel_col]
+    if sales_rep_col:
+        customer_cols.append(sales_rep_col)
+    
+    customer_lookup = customer_df[customer_cols].drop_duplicates(subset=['Customer #'])
+    
+    # Merge to add channel to sales data
+    df_sales = df_sales.merge(customer_lookup, on='Customer #', how='left')
+    
+    # Fill missing channels with 'Unknown'
+    df_sales[channel_col] = df_sales[channel_col].fillna('Unknown')
+    
+    # ============================================================
+    # STEP 3: Calculate MTD and YTD metrics by customer
+    # ============================================================
+    # Filter for target years
+    df_current = df_sales[df_sales['Year'] == target_year].copy()
+    df_prev = df_sales[df_sales['Year'] == prev_year].copy()
+    
+    # Calculate MTD (specific month only)
+    df_mtd_current = df_current[df_current['Month'] == target_month]
+    df_mtd_prev = df_prev[df_prev['Month'] == target_month]
+    
+    # Calculate YTD (months 1 to target_month)
+    df_ytd_current = df_current[df_current['Month'] <= target_month]
+    df_ytd_prev = df_prev[df_prev['Month'] <= target_month]
+    
+    # Aggregate by customer
+    def aggregate_by_customer(df, ch_col, sr_col):
+        agg_cols = ['Customer #', 'Customer Name', ch_col]
+        if sr_col and sr_col in df.columns:
+            agg_cols.append(sr_col)
+        
+        result = df.groupby(agg_cols, dropna=False).agg({
+            'Sales Amount': 'sum'
+        }).reset_index()
+        return result
+    
+    mtd_current_agg = aggregate_by_customer(df_mtd_current, channel_col, sales_rep_col)
+    mtd_prev_agg = aggregate_by_customer(df_mtd_prev, channel_col, sales_rep_col)
+    ytd_current_agg = aggregate_by_customer(df_ytd_current, channel_col, sales_rep_col)
+    ytd_prev_agg = aggregate_by_customer(df_ytd_prev, channel_col, sales_rep_col)
+    
+    # Rename columns
+    mtd_current_agg = mtd_current_agg.rename(columns={'Sales Amount': f'{target_year}_MTD_Sales'})
+    mtd_prev_agg = mtd_prev_agg.rename(columns={'Sales Amount': f'{prev_year}_MTD_Sales'})
+    ytd_current_agg = ytd_current_agg.rename(columns={'Sales Amount': f'{target_year}_YTD_Sales'})
+    ytd_prev_agg = ytd_prev_agg.rename(columns={'Sales Amount': f'{prev_year}_YTD_Sales'})
+    
+    # Start with MTD current
+    customer_metrics = mtd_current_agg.copy()
+    
+    # Merge MTD previous
+    customer_metrics = customer_metrics.merge(
+        mtd_prev_agg[['Customer #', f'{prev_year}_MTD_Sales']],
+        on='Customer #',
+        how='outer'
+    )
+    
+    # Merge YTD current
+    customer_metrics = customer_metrics.merge(
+        ytd_current_agg[['Customer #', f'{target_year}_YTD_Sales']],
+        on='Customer #',
+        how='outer'
+    )
+    
+    # Merge YTD previous
+    customer_metrics = customer_metrics.merge(
+        ytd_prev_agg[['Customer #', f'{prev_year}_YTD_Sales']],
+        on='Customer #',
+        how='outer'
+    )
+    
+    # Fill NaN values with 0 for sales columns
+    sales_cols = [f'{target_year}_MTD_Sales', f'{prev_year}_MTD_Sales', 
+                  f'{target_year}_YTD_Sales', f'{prev_year}_YTD_Sales']
+    for col in sales_cols:
+        if col in customer_metrics.columns:
+            customer_metrics[col] = customer_metrics[col].fillna(0)
+    
+    # Get complete customer info
+    all_customers = pd.concat([
+        df_sales[['Customer #', 'Customer Name', channel_col] + 
+                 ([sales_rep_col] if sales_rep_col else [])]
+    ]).drop_duplicates(subset=['Customer #'])
+    
+    # Update missing customer info
+    cols_to_drop = ['Customer Name', channel_col]
+    if sales_rep_col and sales_rep_col in customer_metrics.columns:
+        cols_to_drop.append(sales_rep_col)
+    customer_metrics = customer_metrics.drop(columns=cols_to_drop, errors='ignore')
+    customer_metrics = customer_metrics.merge(all_customers, on='Customer #', how='left')
+    
+    # Calculate % Achieved
+    customer_metrics['MTD_Achieved_%'] = customer_metrics.apply(
+        lambda x: (x[f'{target_year}_MTD_Sales'] / x[f'{prev_year}_MTD_Sales'] * 100) 
+        if x[f'{prev_year}_MTD_Sales'] > 0 else 0, axis=1
+    )
+    customer_metrics['YTD_Achieved_%'] = customer_metrics.apply(
+        lambda x: (x[f'{target_year}_YTD_Sales'] / x[f'{prev_year}_YTD_Sales'] * 100) 
+        if x[f'{prev_year}_YTD_Sales'] > 0 else 0, axis=1
+    )
+    
+    # ============================================================
+    # STEP 4: Calculate Channel-Level MTD/YTD Totals
+    # ============================================================
+    channel_metrics = customer_metrics.groupby(channel_col).agg({
+        f'{target_year}_MTD_Sales': 'sum',
+        f'{prev_year}_MTD_Sales': 'sum',
+        f'{target_year}_YTD_Sales': 'sum',
+        f'{prev_year}_YTD_Sales': 'sum',
+        'Customer #': 'count'
+    }).reset_index()
+    
+    channel_metrics = channel_metrics.rename(columns={'Customer #': 'Customer_Count'})
+    
+    # Calculate % Achieved for channels
+    channel_metrics['MTD_Achieved_%'] = channel_metrics.apply(
+        lambda x: (x[f'{target_year}_MTD_Sales'] / x[f'{prev_year}_MTD_Sales'] * 100) 
+        if x[f'{prev_year}_MTD_Sales'] > 0 else 0, axis=1
+    )
+    channel_metrics['YTD_Achieved_%'] = channel_metrics.apply(
+        lambda x: (x[f'{target_year}_YTD_Sales'] / x[f'{prev_year}_YTD_Sales'] * 100) 
+        if x[f'{prev_year}_YTD_Sales'] > 0 else 0, axis=1
+    )
+    
+    # Calculate YoY Growth
+    channel_metrics['MTD_YoY_Growth'] = channel_metrics.apply(
+        lambda x: ((x[f'{target_year}_MTD_Sales'] - x[f'{prev_year}_MTD_Sales']) / x[f'{prev_year}_MTD_Sales'] * 100) 
+        if x[f'{prev_year}_MTD_Sales'] > 0 else 0, axis=1
+    )
+    channel_metrics['YTD_YoY_Growth'] = channel_metrics.apply(
+        lambda x: ((x[f'{target_year}_YTD_Sales'] - x[f'{prev_year}_YTD_Sales']) / x[f'{prev_year}_YTD_Sales'] * 100) 
+        if x[f'{prev_year}_YTD_Sales'] > 0 else 0, axis=1
+    )
+    
+    # Calculate Grand Total
+    grand_total = {
+        'Channel': 'GRAND TOTAL',
+        'Customer_Count': channel_metrics['Customer_Count'].sum(),
+        f'{target_year}_MTD_Sales': channel_metrics[f'{target_year}_MTD_Sales'].sum(),
+        f'{prev_year}_MTD_Sales': channel_metrics[f'{prev_year}_MTD_Sales'].sum(),
+        f'{target_year}_YTD_Sales': channel_metrics[f'{target_year}_YTD_Sales'].sum(),
+        f'{prev_year}_YTD_Sales': channel_metrics[f'{prev_year}_YTD_Sales'].sum(),
+    }
+    grand_total['MTD_Achieved_%'] = (grand_total[f'{target_year}_MTD_Sales'] / grand_total[f'{prev_year}_MTD_Sales'] * 100) if grand_total[f'{prev_year}_MTD_Sales'] > 0 else 0
+    grand_total['YTD_Achieved_%'] = (grand_total[f'{target_year}_YTD_Sales'] / grand_total[f'{prev_year}_YTD_Sales'] * 100) if grand_total[f'{prev_year}_YTD_Sales'] > 0 else 0
+    
+    # ============================================================
+    # STEP 5: Generate Top 10 by Channel for MTD and YTD
+    # ============================================================
+    channels = customer_metrics[channel_col].dropna().unique()
+    channels = [c for c in channels if c != 'Unknown']
+    channels = sorted(channels)
+    
+    results = {
+        'channel_metrics': channel_metrics,
+        'grand_total': grand_total,
+        'top10_by_channel': {},
+        'channel_col': channel_col,
+        'sales_rep_col': sales_rep_col,
+        'target_year': target_year,
+        'prev_year': prev_year,
+        'channels': channels
+    }
+    
+    for channel in channels:
+        channel_data = customer_metrics[customer_metrics[channel_col] == channel].copy()
+        
+        if channel_data.empty:
+            continue
+        
+        # Top 10 MTD
+        top10_mtd = channel_data.nlargest(10, f'{target_year}_MTD_Sales')
+        
+        # Top 10 YTD
+        top10_ytd = channel_data.nlargest(10, f'{target_year}_YTD_Sales')
+        
+        results['top10_by_channel'][channel] = {
+            'MTD': top10_mtd,
+            'YTD': top10_ytd
+        }
+    
+    return results
+
+
+def create_channel_customer_excel_report(results, target_month, target_year, month_name):
+    """Create Excel report with channel summary and top 10 customers per channel"""
+    
+    if results is None:
+        return None
+    
+    prev_year = target_year - 1
+    channel_col = results['channel_col']
+    sales_rep_col = results['sales_rep_col']
+    channel_metrics = results['channel_metrics']
+    grand_total = results['grand_total']
+    channels = results['channels']
+    
+    wb = Workbook()
+    wb.remove(wb.active)
+    
+    # Styling
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF", size=10)
+    title_font = Font(bold=True, size=14)
+    subtitle_font = Font(bold=True, size=12)
+    border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    
+    # Color fills
+    current_year_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+    prev_year_fill = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
+    achieved_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+    total_fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
+    
+    # ============================================================
+    # Create Summary Sheet with Channel MTD/YTD Totals
+    # ============================================================
+    ws_summary = wb.create_sheet(title="Channel Summary", index=0)
+    
+    # Title
+    ws_summary.merge_cells('A1:J1')
+    ws_summary['A1'] = f"Channel Performance Summary - MTD/YTD ({target_month}/{target_year})"
+    ws_summary['A1'].font = Font(bold=True, size=16)
+    ws_summary['A1'].alignment = Alignment(horizontal='center')
+    
+    # Channel Summary Headers
+    summary_headers = [
+        'Channel', 'Customers',
+        f'{target_year} MTD', f'{prev_year} MTD', 'MTD %', 'MTD YoY Growth',
+        f'{target_year} YTD', f'{prev_year} YTD', 'YTD %', 'YTD YoY Growth'
+    ]
+    
+    for col_idx, header in enumerate(summary_headers, start=1):
+        cell = ws_summary.cell(row=3, column=col_idx, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        cell.border = border
+    
+    # Write Channel Data
+    row_idx = 4
+    for _, ch_row in channel_metrics.iterrows():
+        if ch_row[channel_col] == 'Unknown':
+            continue
+        
+        ws_summary.cell(row=row_idx, column=1, value=ch_row[channel_col]).border = border
+        ws_summary.cell(row=row_idx, column=2, value=ch_row['Customer_Count']).border = border
+        
+        # MTD Current Year
+        cell = ws_summary.cell(row=row_idx, column=3, value=ch_row[f'{target_year}_MTD_Sales'])
+        cell.number_format = '$#,##0.00'
+        cell.fill = current_year_fill
+        cell.border = border
+        
+        # MTD Previous Year
+        cell = ws_summary.cell(row=row_idx, column=4, value=ch_row[f'{prev_year}_MTD_Sales'])
+        cell.number_format = '$#,##0.00'
+        cell.fill = prev_year_fill
+        cell.border = border
+        
+        # MTD Achieved %
+        cell = ws_summary.cell(row=row_idx, column=5, value=ch_row['MTD_Achieved_%'] / 100)
+        cell.number_format = '0.0%'
+        cell.fill = achieved_fill
+        cell.border = border
+        
+        # MTD YoY Growth
+        cell = ws_summary.cell(row=row_idx, column=6, value=ch_row['MTD_YoY_Growth'] / 100)
+        cell.number_format = '+0.0%;-0.0%'
+        cell.border = border
+        
+        # YTD Current Year
+        cell = ws_summary.cell(row=row_idx, column=7, value=ch_row[f'{target_year}_YTD_Sales'])
+        cell.number_format = '$#,##0.00'
+        cell.fill = current_year_fill
+        cell.border = border
+        
+        # YTD Previous Year
+        cell = ws_summary.cell(row=row_idx, column=8, value=ch_row[f'{prev_year}_YTD_Sales'])
+        cell.number_format = '$#,##0.00'
+        cell.fill = prev_year_fill
+        cell.border = border
+        
+        # YTD Achieved %
+        cell = ws_summary.cell(row=row_idx, column=9, value=ch_row['YTD_Achieved_%'] / 100)
+        cell.number_format = '0.0%'
+        cell.fill = achieved_fill
+        cell.border = border
+        
+        # YTD YoY Growth
+        cell = ws_summary.cell(row=row_idx, column=10, value=ch_row['YTD_YoY_Growth'] / 100)
+        cell.number_format = '+0.0%;-0.0%'
+        cell.border = border
+        
+        row_idx += 1
+    
+    # Grand Total Row
+    ws_summary.cell(row=row_idx, column=1, value='GRAND TOTAL').font = Font(bold=True)
+    ws_summary.cell(row=row_idx, column=1).fill = total_fill
+    ws_summary.cell(row=row_idx, column=1).border = border
+    
+    ws_summary.cell(row=row_idx, column=2, value=grand_total['Customer_Count']).font = Font(bold=True)
+    ws_summary.cell(row=row_idx, column=2).fill = total_fill
+    ws_summary.cell(row=row_idx, column=2).border = border
+    
+    cell = ws_summary.cell(row=row_idx, column=3, value=grand_total[f'{target_year}_MTD_Sales'])
+    cell.number_format = '$#,##0.00'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    
+    cell = ws_summary.cell(row=row_idx, column=4, value=grand_total[f'{prev_year}_MTD_Sales'])
+    cell.number_format = '$#,##0.00'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    
+    cell = ws_summary.cell(row=row_idx, column=5, value=grand_total['MTD_Achieved_%'] / 100)
+    cell.number_format = '0.0%'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    
+    mtd_growth = ((grand_total[f'{target_year}_MTD_Sales'] - grand_total[f'{prev_year}_MTD_Sales']) / grand_total[f'{prev_year}_MTD_Sales'] * 100) if grand_total[f'{prev_year}_MTD_Sales'] > 0 else 0
+    cell = ws_summary.cell(row=row_idx, column=6, value=mtd_growth / 100)
+    cell.number_format = '+0.0%;-0.0%'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    
+    cell = ws_summary.cell(row=row_idx, column=7, value=grand_total[f'{target_year}_YTD_Sales'])
+    cell.number_format = '$#,##0.00'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    
+    cell = ws_summary.cell(row=row_idx, column=8, value=grand_total[f'{prev_year}_YTD_Sales'])
+    cell.number_format = '$#,##0.00'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    
+    cell = ws_summary.cell(row=row_idx, column=9, value=grand_total['YTD_Achieved_%'] / 100)
+    cell.number_format = '0.0%'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    
+    ytd_growth = ((grand_total[f'{target_year}_YTD_Sales'] - grand_total[f'{prev_year}_YTD_Sales']) / grand_total[f'{prev_year}_YTD_Sales'] * 100) if grand_total[f'{prev_year}_YTD_Sales'] > 0 else 0
+    cell = ws_summary.cell(row=row_idx, column=10, value=ytd_growth / 100)
+    cell.number_format = '+0.0%;-0.0%'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    
+    # Adjust column widths
+    ws_summary.column_dimensions['A'].width = 18
+    ws_summary.column_dimensions['B'].width = 12
+    ws_summary.column_dimensions['C'].width = 16
+    ws_summary.column_dimensions['D'].width = 16
+    ws_summary.column_dimensions['E'].width = 10
+    ws_summary.column_dimensions['F'].width = 14
+    ws_summary.column_dimensions['G'].width = 16
+    ws_summary.column_dimensions['H'].width = 16
+    ws_summary.column_dimensions['I'].width = 10
+    ws_summary.column_dimensions['J'].width = 14
+    
+    ws_summary.row_dimensions[3].height = 30
+    
+    # ============================================================
+    # Add Charts to Summary Sheet
+    # ============================================================
+    chart_start_row = row_idx + 3
+    
+    # Create charts
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle(f'Channel Performance Analysis - {target_month}/{target_year}', fontsize=14, fontweight='bold')
+    
+    # Filter out Unknown channel for charts
+    chart_data = channel_metrics[channel_metrics[channel_col] != 'Unknown'].copy()
+    chart_channels = chart_data[channel_col].tolist()
+    
+    if len(chart_channels) > 0:
+        x = np.arange(len(chart_channels))
+        width = 0.35
+        
+        # Chart 1: MTD Sales by Channel
+        axes[0, 0].bar(x - width/2, chart_data[f'{target_year}_MTD_Sales'], width, 
+                               label=str(target_year), color='#2E86AB', alpha=0.8)
+        axes[0, 0].bar(x + width/2, chart_data[f'{prev_year}_MTD_Sales'], width, 
+                               label=str(prev_year), color='#A23B72', alpha=0.8)
+        axes[0, 0].set_title('MTD Sales by Channel', fontsize=11, fontweight='bold')
+        axes[0, 0].set_ylabel('Sales Amount ($)')
+        axes[0, 0].set_xticks(x)
+        axes[0, 0].set_xticklabels(chart_channels, rotation=45, ha='right', fontsize=9)
+        axes[0, 0].legend(fontsize=9)
+        axes[0, 0].yaxis.set_major_formatter(plt.FuncFormatter(lambda v, p: f'${v/1000:.0f}K'))
+        axes[0, 0].grid(axis='y', alpha=0.3)
+        
+        # Chart 2: YTD Sales by Channel
+        axes[0, 1].bar(x - width/2, chart_data[f'{target_year}_YTD_Sales'], width, 
+                               label=str(target_year), color='#2E86AB', alpha=0.8)
+        axes[0, 1].bar(x + width/2, chart_data[f'{prev_year}_YTD_Sales'], width, 
+                               label=str(prev_year), color='#A23B72', alpha=0.8)
+        axes[0, 1].set_title('YTD Sales by Channel', fontsize=11, fontweight='bold')
+        axes[0, 1].set_ylabel('Sales Amount ($)')
+        axes[0, 1].set_xticks(x)
+        axes[0, 1].set_xticklabels(chart_channels, rotation=45, ha='right', fontsize=9)
+        axes[0, 1].legend(fontsize=9)
+        axes[0, 1].yaxis.set_major_formatter(plt.FuncFormatter(lambda v, p: f'${v/1000:.0f}K'))
+        axes[0, 1].grid(axis='y', alpha=0.3)
+        
+        # Chart 3: MTD % Achieved by Channel
+        colors = ['#28a745' if v >= 100 else '#dc3545' for v in chart_data['MTD_Achieved_%']]
+        axes[1, 0].barh(chart_channels, chart_data['MTD_Achieved_%'], color=colors, alpha=0.8)
+        axes[1, 0].axvline(x=100, color='black', linestyle='--', linewidth=1, label='100% Target')
+        axes[1, 0].set_title('MTD % Achieved by Channel', fontsize=11, fontweight='bold')
+        axes[1, 0].set_xlabel('% Achieved')
+        for i, v in enumerate(chart_data['MTD_Achieved_%']):
+            axes[1, 0].text(v + 2, i, f'{v:.1f}%', va='center', fontsize=9)
+        axes[1, 0].grid(axis='x', alpha=0.3)
+        
+        # Chart 4: YTD % Achieved by Channel
+        colors = ['#28a745' if v >= 100 else '#dc3545' for v in chart_data['YTD_Achieved_%']]
+        axes[1, 1].barh(chart_channels, chart_data['YTD_Achieved_%'], color=colors, alpha=0.8)
+        axes[1, 1].axvline(x=100, color='black', linestyle='--', linewidth=1, label='100% Target')
+        axes[1, 1].set_title('YTD % Achieved by Channel', fontsize=11, fontweight='bold')
+        axes[1, 1].set_xlabel('% Achieved')
+        for i, v in enumerate(chart_data['YTD_Achieved_%']):
+            axes[1, 1].text(v + 2, i, f'{v:.1f}%', va='center', fontsize=9)
+        axes[1, 1].grid(axis='x', alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save chart to buffer
+    img_buffer = io.BytesIO()
+    fig.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
+    img_buffer.seek(0)
+    plt.close(fig)
+    
+    img = XLImage(img_buffer)
+    ws_summary.add_image(img, f'A{chart_start_row}')
+    
+    # ============================================================
+    # Create Individual Channel Sheets with Top 10 Customers
+    # ============================================================
+    for channel, data in results['top10_by_channel'].items():
+        clean_channel = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in channel)[:30]
+        ws = wb.create_sheet(title=clean_channel)
+        
+        # Get channel totals
+        ch_metrics = channel_metrics[channel_metrics[channel_col] == channel].iloc[0]
+        
+        # ---- Channel Summary Section ----
+        ws.merge_cells('A1:G1')
+        ws['A1'] = f"Channel: {channel} - Performance Summary ({target_month}/{target_year})"
+        ws['A1'].font = title_font
+        ws['A1'].alignment = Alignment(horizontal='center')
+        
+        # Channel Totals Table
+        ws['A3'] = 'Metric'
+        ws['B3'] = f'{target_year}'
+        ws['C3'] = f'{prev_year}'
+        ws['D3'] = '% Achieved'
+        ws['E3'] = 'YoY Growth'
+        
+        for col in range(1, 6):
+            ws.cell(row=3, column=col).font = header_font
+            ws.cell(row=3, column=col).fill = header_fill
+            ws.cell(row=3, column=col).border = border
+            ws.cell(row=3, column=col).alignment = Alignment(horizontal='center')
+        
+        # MTD Row
+        ws['A4'] = 'MTD Sales'
+        ws['A4'].border = border
+        
+        cell = ws.cell(row=4, column=2, value=ch_metrics[f'{target_year}_MTD_Sales'])
+        cell.number_format = '$#,##0.00'
+        cell.fill = current_year_fill
+        cell.border = border
+        
+        cell = ws.cell(row=4, column=3, value=ch_metrics[f'{prev_year}_MTD_Sales'])
+        cell.number_format = '$#,##0.00'
+        cell.fill = prev_year_fill
+        cell.border = border
+        
+        cell = ws.cell(row=4, column=4, value=ch_metrics['MTD_Achieved_%'] / 100)
+        cell.number_format = '0.0%'
+        cell.fill = achieved_fill
+        cell.border = border
+        
+        cell = ws.cell(row=4, column=5, value=ch_metrics['MTD_YoY_Growth'] / 100)
+        cell.number_format = '+0.0%;-0.0%'
+        cell.border = border
+        
+        # YTD Row
+        ws['A5'] = 'YTD Sales'
+        ws['A5'].border = border
+        
+        cell = ws.cell(row=5, column=2, value=ch_metrics[f'{target_year}_YTD_Sales'])
+        cell.number_format = '$#,##0.00'
+        cell.fill = current_year_fill
+        cell.border = border
+        
+        cell = ws.cell(row=5, column=3, value=ch_metrics[f'{prev_year}_YTD_Sales'])
+        cell.number_format = '$#,##0.00'
+        cell.fill = prev_year_fill
+        cell.border = border
+        
+        cell = ws.cell(row=5, column=4, value=ch_metrics['YTD_Achieved_%'] / 100)
+        cell.number_format = '0.0%'
+        cell.fill = achieved_fill
+        cell.border = border
+        
+        cell = ws.cell(row=5, column=5, value=ch_metrics['YTD_YoY_Growth'] / 100)
+        cell.number_format = '+0.0%;-0.0%'
+        cell.border = border
+        
+        # ---- MTD Top 10 Section ----
+        ws.merge_cells('A8:G8')
+        ws['A8'] = "Top 10 MTD Customers"
+        ws['A8'].font = subtitle_font
+        ws['A8'].alignment = Alignment(horizontal='center')
+        
+        mtd_headers = ['Rank', 'Customer #', 'Customer Name', 
+                       f'{target_year} MTD Sales', f'{prev_year} MTD Sales', '% Achieved']
+        if sales_rep_col:
+            mtd_headers.insert(3, 'Sales Rep')
+        
+        for col_idx, header in enumerate(mtd_headers, start=1):
+            cell = ws.cell(row=9, column=col_idx, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            cell.border = border
+        
+        mtd_df = data['MTD']
+        for row_idx_inner, (_, row) in enumerate(mtd_df.iterrows(), start=10):
+            rank = row_idx_inner - 9
+            col = 1
+            
+            cell = ws.cell(row=row_idx_inner, column=col, value=rank)
+            cell.border = border
+            cell.alignment = Alignment(horizontal='center')
+            col += 1
+            
+            cell = ws.cell(row=row_idx_inner, column=col, value=row['Customer #'])
+            cell.border = border
+            col += 1
+            
+            cell = ws.cell(row=row_idx_inner, column=col, value=row['Customer Name'])
+            cell.border = border
+            col += 1
+            
+            if sales_rep_col:
+                cell = ws.cell(row=row_idx_inner, column=col, value=row.get(sales_rep_col, ''))
+                cell.border = border
+                col += 1
+            
+            cell = ws.cell(row=row_idx_inner, column=col, value=row[f'{target_year}_MTD_Sales'])
+            cell.number_format = '$#,##0.00'
+            cell.fill = current_year_fill
+            cell.border = border
+            col += 1
+            
+            cell = ws.cell(row=row_idx_inner, column=col, value=row[f'{prev_year}_MTD_Sales'])
+            cell.number_format = '$#,##0.00'
+            cell.fill = prev_year_fill
+            cell.border = border
+            col += 1
+            
+            cell = ws.cell(row=row_idx_inner, column=col, value=row['MTD_Achieved_%'] / 100)
+            cell.number_format = '0.00%'
+            cell.fill = achieved_fill
+            cell.border = border
+        
+        # ---- YTD Top 10 Section ----
+        ytd_start_row = 10 + len(mtd_df) + 2
+        
+        ws.merge_cells(f'A{ytd_start_row}:G{ytd_start_row}')
+        ws.cell(row=ytd_start_row, column=1, value="Top 10 YTD Customers")
+        ws.cell(row=ytd_start_row, column=1).font = subtitle_font
+        ws.cell(row=ytd_start_row, column=1).alignment = Alignment(horizontal='center')
+        
+        ytd_headers = ['Rank', 'Customer #', 'Customer Name', 
+                       f'{target_year} YTD Sales', f'{prev_year} YTD Sales', '% Achieved']
+        if sales_rep_col:
+            ytd_headers.insert(3, 'Sales Rep')
+        
+        header_row = ytd_start_row + 1
+        for col_idx, header in enumerate(ytd_headers, start=1):
+            cell = ws.cell(row=header_row, column=col_idx, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            cell.border = border
+        
+        ytd_df = data['YTD']
+        for row_idx_inner, (_, row) in enumerate(ytd_df.iterrows(), start=header_row + 1):
+            rank = row_idx_inner - header_row
+            col = 1
+            
+            cell = ws.cell(row=row_idx_inner, column=col, value=rank)
+            cell.border = border
+            cell.alignment = Alignment(horizontal='center')
+            col += 1
+            
+            cell = ws.cell(row=row_idx_inner, column=col, value=row['Customer #'])
+            cell.border = border
+            col += 1
+            
+            cell = ws.cell(row=row_idx_inner, column=col, value=row['Customer Name'])
+            cell.border = border
+            col += 1
+            
+            if sales_rep_col:
+                cell = ws.cell(row=row_idx_inner, column=col, value=row.get(sales_rep_col, ''))
+                cell.border = border
+                col += 1
+            
+            cell = ws.cell(row=row_idx_inner, column=col, value=row[f'{target_year}_YTD_Sales'])
+            cell.number_format = '$#,##0.00'
+            cell.fill = current_year_fill
+            cell.border = border
+            col += 1
+            
+            cell = ws.cell(row=row_idx_inner, column=col, value=row[f'{prev_year}_YTD_Sales'])
+            cell.number_format = '$#,##0.00'
+            cell.fill = prev_year_fill
+            cell.border = border
+            col += 1
+            
+            cell = ws.cell(row=row_idx_inner, column=col, value=row['YTD_Achieved_%'] / 100)
+            cell.number_format = '0.00%'
+            cell.fill = achieved_fill
+            cell.border = border
+        
+        # Adjust column widths
+        ws.column_dimensions['A'].width = 8
+        ws.column_dimensions['B'].width = 14
+        ws.column_dimensions['C'].width = 30
+        ws.column_dimensions['D'].width = 16
+        ws.column_dimensions['E'].width = 16
+        ws.column_dimensions['F'].width = 12
+        ws.column_dimensions['G'].width = 12
+    
+    # Save workbook to bytes
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    return output
+
+
+def generate_sales_rep_performance(sales_df_raw, customer_df, target_month, target_year):
+    """
+    Generate MTD/YTD performance reports for each Sales Rep.
+    
+    Args:
+        sales_df_raw: Raw sales details DataFrame (already read from file)
+        customer_df: Customer list DataFrame with Sales Rep column
+        target_month: Month for MTD calculation
+        target_year: Year for calculations
+    
+    Returns:
+        Dictionary with sales rep performance data including:
+        - sales_rep_metrics: DataFrame with MTD/YTD totals by sales rep
+        - grand_total: Overall totals
+        - sales_rep_col: Name of the sales rep column
+    """
+    prev_year = target_year - 1
+    
+    # ============================================================
+    # STEP 1: Parse sales data
+    # ============================================================
+    col_period = 1
+    col_sales_amount = 17
+    
+    data_rows = []
+    current_customer = None
+    current_customer_name = None
+    
+    for idx in range(11, len(sales_df_raw)):
+        row = sales_df_raw.iloc[idx]
+        first_cell = row.iloc[0]
+        
+        if pd.isna(first_cell):
+            continue
+        
+        first_cell_str = str(first_cell).strip()
+        
+        if first_cell_str and not first_cell_str.isdigit() and not first_cell_str.startswith('Item'):
+            if any(c.isalpha() for c in first_cell_str) and any(c.isdigit() for c in first_cell_str):
+                current_customer = first_cell_str
+                cust_name = row.iloc[7] if pd.notna(row.iloc[7]) else ''
+                current_customer_name = str(cust_name).strip() if cust_name else current_customer
+                continue
+        
+        if first_cell_str.isdigit() and len(first_cell_str) == 4:
+            year = int(first_cell_str)
+            
+            period_cell = row.iloc[col_period]
+            month = None
+            if pd.notna(period_cell):
+                try:
+                    month = int(float(period_cell))
+                except (ValueError, TypeError):
+                    month = None
+            
+            sales_amount = row.iloc[col_sales_amount]
+            
+            if pd.notna(sales_amount) and current_customer and month is not None:
+                try:
+                    sales_value = float(sales_amount)
+                    data_rows.append({
+                        'Customer #': current_customer,
+                        'Customer Name': current_customer_name,
+                        'Year': year,
+                        'Month': month,
+                        'Sales Amount': sales_value
+                    })
+                except (ValueError, TypeError):
+                    pass
+    
+    df_sales = pd.DataFrame(data_rows)
+    
+    if df_sales.empty:
+        return None
+    
+    # ============================================================
+    # STEP 2: Join with customer list to get Sales Rep
+    # ============================================================
+    sales_rep_col = None
+    for col in customer_df.columns:
+        if 'sales' in col.lower() and 'rep' in col.lower():
+            sales_rep_col = col
+            break
+    
+    if not sales_rep_col:
+        return None
+    
+    # Create lookup for customer -> sales rep
+    customer_lookup = customer_df[['Customer #', sales_rep_col]].drop_duplicates(subset=['Customer #'])
+    
+    # Merge to add sales rep to sales data
+    df_sales = df_sales.merge(customer_lookup, on='Customer #', how='left')
+    
+    # Fill missing sales reps with 'Unassigned'
+    df_sales[sales_rep_col] = df_sales[sales_rep_col].fillna('Unassigned')
+    
+    # ============================================================
+    # STEP 3: Calculate MTD and YTD metrics by Sales Rep
+    # ============================================================
+    df_current = df_sales[df_sales['Year'] == target_year].copy()
+    df_prev = df_sales[df_sales['Year'] == prev_year].copy()
+    
+    # Calculate MTD (specific month only)
+    df_mtd_current = df_current[df_current['Month'] == target_month]
+    df_mtd_prev = df_prev[df_prev['Month'] == target_month]
+    
+    # Calculate YTD (months 1 to target_month)
+    df_ytd_current = df_current[df_current['Month'] <= target_month]
+    df_ytd_prev = df_prev[df_prev['Month'] <= target_month]
+    
+    # Aggregate by Sales Rep
+    def aggregate_by_rep(df, rep_col):
+        return df.groupby(rep_col).agg({
+            'Sales Amount': 'sum',
+            'Customer #': 'nunique'
+        }).reset_index()
+    
+    mtd_current_agg = aggregate_by_rep(df_mtd_current, sales_rep_col)
+    mtd_prev_agg = aggregate_by_rep(df_mtd_prev, sales_rep_col)
+    ytd_current_agg = aggregate_by_rep(df_ytd_current, sales_rep_col)
+    ytd_prev_agg = aggregate_by_rep(df_ytd_prev, sales_rep_col)
+    
+    # Rename columns
+    mtd_current_agg = mtd_current_agg.rename(columns={
+        'Sales Amount': f'{target_year}_MTD_Sales',
+        'Customer #': 'Customer_Count'
+    })
+    mtd_prev_agg = mtd_prev_agg.rename(columns={
+        'Sales Amount': f'{prev_year}_MTD_Sales',
+        'Customer #': 'Customer_Count_Prev'
+    })
+    ytd_current_agg = ytd_current_agg.rename(columns={
+        'Sales Amount': f'{target_year}_YTD_Sales',
+        'Customer #': 'Customer_Count_YTD'
+    })
+    ytd_prev_agg = ytd_prev_agg.rename(columns={
+        'Sales Amount': f'{prev_year}_YTD_Sales',
+        'Customer #': 'Customer_Count_YTD_Prev'
+    })
+    
+    # Merge all metrics
+    sales_rep_metrics = mtd_current_agg[[sales_rep_col, f'{target_year}_MTD_Sales', 'Customer_Count']].copy()
+    
+    sales_rep_metrics = sales_rep_metrics.merge(
+        mtd_prev_agg[[sales_rep_col, f'{prev_year}_MTD_Sales']],
+        on=sales_rep_col, how='outer'
+    )
+    sales_rep_metrics = sales_rep_metrics.merge(
+        ytd_current_agg[[sales_rep_col, f'{target_year}_YTD_Sales']],
+        on=sales_rep_col, how='outer'
+    )
+    sales_rep_metrics = sales_rep_metrics.merge(
+        ytd_prev_agg[[sales_rep_col, f'{prev_year}_YTD_Sales']],
+        on=sales_rep_col, how='outer'
+    )
+    
+    # Fill NaN with 0
+    for col in [f'{target_year}_MTD_Sales', f'{prev_year}_MTD_Sales', 
+                f'{target_year}_YTD_Sales', f'{prev_year}_YTD_Sales', 'Customer_Count']:
+        if col in sales_rep_metrics.columns:
+            sales_rep_metrics[col] = sales_rep_metrics[col].fillna(0)
+    
+    # Calculate % Achieved
+    sales_rep_metrics['MTD_Achieved_%'] = sales_rep_metrics.apply(
+        lambda x: (x[f'{target_year}_MTD_Sales'] / x[f'{prev_year}_MTD_Sales'] * 100) 
+        if x[f'{prev_year}_MTD_Sales'] > 0 else 0, axis=1
+    )
+    sales_rep_metrics['YTD_Achieved_%'] = sales_rep_metrics.apply(
+        lambda x: (x[f'{target_year}_YTD_Sales'] / x[f'{prev_year}_YTD_Sales'] * 100) 
+        if x[f'{prev_year}_YTD_Sales'] > 0 else 0, axis=1
+    )
+    
+    # Calculate YoY Growth
+    sales_rep_metrics['MTD_YoY_Growth'] = sales_rep_metrics.apply(
+        lambda x: ((x[f'{target_year}_MTD_Sales'] - x[f'{prev_year}_MTD_Sales']) / x[f'{prev_year}_MTD_Sales'] * 100) 
+        if x[f'{prev_year}_MTD_Sales'] > 0 else 0, axis=1
+    )
+    sales_rep_metrics['YTD_YoY_Growth'] = sales_rep_metrics.apply(
+        lambda x: ((x[f'{target_year}_YTD_Sales'] - x[f'{prev_year}_YTD_Sales']) / x[f'{prev_year}_YTD_Sales'] * 100) 
+        if x[f'{prev_year}_YTD_Sales'] > 0 else 0, axis=1
+    )
+    
+    # Sort by current year YTD sales descending
+    sales_rep_metrics = sales_rep_metrics.sort_values(f'{target_year}_YTD_Sales', ascending=False)
+    
+    # Calculate Grand Total
+    grand_total = {
+        'Sales Rep': 'GRAND TOTAL',
+        'Customer_Count': int(sales_rep_metrics['Customer_Count'].sum()),
+        f'{target_year}_MTD_Sales': sales_rep_metrics[f'{target_year}_MTD_Sales'].sum(),
+        f'{prev_year}_MTD_Sales': sales_rep_metrics[f'{prev_year}_MTD_Sales'].sum(),
+        f'{target_year}_YTD_Sales': sales_rep_metrics[f'{target_year}_YTD_Sales'].sum(),
+        f'{prev_year}_YTD_Sales': sales_rep_metrics[f'{prev_year}_YTD_Sales'].sum(),
+    }
+    grand_total['MTD_Achieved_%'] = (grand_total[f'{target_year}_MTD_Sales'] / grand_total[f'{prev_year}_MTD_Sales'] * 100) if grand_total[f'{prev_year}_MTD_Sales'] > 0 else 0
+    grand_total['YTD_Achieved_%'] = (grand_total[f'{target_year}_YTD_Sales'] / grand_total[f'{prev_year}_YTD_Sales'] * 100) if grand_total[f'{prev_year}_YTD_Sales'] > 0 else 0
+    
+    return {
+        'sales_rep_metrics': sales_rep_metrics,
+        'grand_total': grand_total,
+        'sales_rep_col': sales_rep_col
+    }
+
+
+def create_sales_rep_excel_report(results, target_month, target_year, month_name):
+    """
+    Create Excel report for Sales Rep performance with charts.
+    """
+    if results is None:
+        return None
+    
+    prev_year = target_year - 1
+    sales_rep_metrics = results['sales_rep_metrics']
+    grand_total = results['grand_total']
+    sales_rep_col = results['sales_rep_col']
+    
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sales Rep Summary"
+    
+    # Styling
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF", size=10)
+    border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    
+    # Color fills
+    current_year_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+    prev_year_fill = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
+    achieved_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+    total_fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
+    
+    # Title
+    ws.merge_cells('A1:J1')
+    ws['A1'] = f"Sales Rep Performance Summary - MTD/YTD ({month_name} {target_year})"
+    ws['A1'].font = Font(bold=True, size=16)
+    ws['A1'].alignment = Alignment(horizontal='center')
+    
+    # Headers
+    headers = [
+        'Sales Rep', 'Customers',
+        f'{target_year} MTD', f'{prev_year} MTD', 'MTD %', 'MTD YoY Growth',
+        f'{target_year} YTD', f'{prev_year} YTD', 'YTD %', 'YTD YoY Growth'
+    ]
+    
+    for col_idx, header in enumerate(headers, start=1):
+        cell = ws.cell(row=3, column=col_idx, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        cell.border = border
+    
+    # Write Sales Rep Data
+    row_idx = 4
+    for _, rep_row in sales_rep_metrics.iterrows():
+        if rep_row[sales_rep_col] == 'Unassigned':
+            continue
+        
+        ws.cell(row=row_idx, column=1, value=rep_row[sales_rep_col]).border = border
+        ws.cell(row=row_idx, column=2, value=int(rep_row['Customer_Count'])).border = border
+        
+        # MTD Current Year
+        cell = ws.cell(row=row_idx, column=3, value=rep_row[f'{target_year}_MTD_Sales'])
+        cell.number_format = '$#,##0.00'
+        cell.fill = current_year_fill
+        cell.border = border
+        
+        # MTD Previous Year
+        cell = ws.cell(row=row_idx, column=4, value=rep_row[f'{prev_year}_MTD_Sales'])
+        cell.number_format = '$#,##0.00'
+        cell.fill = prev_year_fill
+        cell.border = border
+        
+        # MTD Achieved %
+        cell = ws.cell(row=row_idx, column=5, value=rep_row['MTD_Achieved_%'] / 100)
+        cell.number_format = '0.0%'
+        cell.fill = achieved_fill
+        cell.border = border
+        
+        # MTD YoY Growth
+        cell = ws.cell(row=row_idx, column=6, value=rep_row['MTD_YoY_Growth'] / 100)
+        cell.number_format = '+0.0%;-0.0%'
+        cell.border = border
+        
+        # YTD Current Year
+        cell = ws.cell(row=row_idx, column=7, value=rep_row[f'{target_year}_YTD_Sales'])
+        cell.number_format = '$#,##0.00'
+        cell.fill = current_year_fill
+        cell.border = border
+        
+        # YTD Previous Year
+        cell = ws.cell(row=row_idx, column=8, value=rep_row[f'{prev_year}_YTD_Sales'])
+        cell.number_format = '$#,##0.00'
+        cell.fill = prev_year_fill
+        cell.border = border
+        
+        # YTD Achieved %
+        cell = ws.cell(row=row_idx, column=9, value=rep_row['YTD_Achieved_%'] / 100)
+        cell.number_format = '0.0%'
+        cell.fill = achieved_fill
+        cell.border = border
+        
+        # YTD YoY Growth
+        cell = ws.cell(row=row_idx, column=10, value=rep_row['YTD_YoY_Growth'] / 100)
+        cell.number_format = '+0.0%;-0.0%'
+        cell.border = border
+        
+        row_idx += 1
+    
+    # Grand Total Row
+    for col in range(1, 11):
+        ws.cell(row=row_idx, column=col).fill = total_fill
+        ws.cell(row=row_idx, column=col).border = border
+        ws.cell(row=row_idx, column=col).font = Font(bold=True)
+    
+    ws.cell(row=row_idx, column=1, value='GRAND TOTAL')
+    ws.cell(row=row_idx, column=2, value=grand_total['Customer_Count'])
+    
+    cell = ws.cell(row=row_idx, column=3, value=grand_total[f'{target_year}_MTD_Sales'])
+    cell.number_format = '$#,##0.00'
+    
+    cell = ws.cell(row=row_idx, column=4, value=grand_total[f'{prev_year}_MTD_Sales'])
+    cell.number_format = '$#,##0.00'
+    
+    cell = ws.cell(row=row_idx, column=5, value=grand_total['MTD_Achieved_%'] / 100)
+    cell.number_format = '0.0%'
+    
+    mtd_growth = ((grand_total[f'{target_year}_MTD_Sales'] - grand_total[f'{prev_year}_MTD_Sales']) / grand_total[f'{prev_year}_MTD_Sales'] * 100) if grand_total[f'{prev_year}_MTD_Sales'] > 0 else 0
+    cell = ws.cell(row=row_idx, column=6, value=mtd_growth / 100)
+    cell.number_format = '+0.0%;-0.0%'
+    
+    cell = ws.cell(row=row_idx, column=7, value=grand_total[f'{target_year}_YTD_Sales'])
+    cell.number_format = '$#,##0.00'
+    
+    cell = ws.cell(row=row_idx, column=8, value=grand_total[f'{prev_year}_YTD_Sales'])
+    cell.number_format = '$#,##0.00'
+    
+    cell = ws.cell(row=row_idx, column=9, value=grand_total['YTD_Achieved_%'] / 100)
+    cell.number_format = '0.0%'
+    
+    ytd_growth = ((grand_total[f'{target_year}_YTD_Sales'] - grand_total[f'{prev_year}_YTD_Sales']) / grand_total[f'{prev_year}_YTD_Sales'] * 100) if grand_total[f'{prev_year}_YTD_Sales'] > 0 else 0
+    cell = ws.cell(row=row_idx, column=10, value=ytd_growth / 100)
+    cell.number_format = '+0.0%;-0.0%'
+    
+    # Adjust column widths
+    ws.column_dimensions['A'].width = 20
+    ws.column_dimensions['B'].width = 12
+    ws.column_dimensions['C'].width = 16
+    ws.column_dimensions['D'].width = 16
+    ws.column_dimensions['E'].width = 10
+    ws.column_dimensions['F'].width = 14
+    ws.column_dimensions['G'].width = 16
+    ws.column_dimensions['H'].width = 16
+    ws.column_dimensions['I'].width = 10
+    ws.column_dimensions['J'].width = 14
+    
+    ws.row_dimensions[3].height = 30
+    
+    # ============================================================
+    # Add Charts
+    # ============================================================
+    chart_start_row = row_idx + 3
+    
+    # Filter out Unassigned for charts
+    chart_data = sales_rep_metrics[sales_rep_metrics[sales_rep_col] != 'Unassigned'].copy()
+    chart_reps = chart_data[sales_rep_col].tolist()
+    
+    if len(chart_reps) > 0:
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig.suptitle(f'Sales Rep Performance Analysis - {month_name} {target_year}', fontsize=14, fontweight='bold')
+        
+        x = np.arange(len(chart_reps))
+        width = 0.35
+        
+        # Chart 1: MTD Sales by Sales Rep
+        axes[0, 0].bar(x - width/2, chart_data[f'{target_year}_MTD_Sales'], width, 
+                       label=str(target_year), color='#2E86AB', alpha=0.8)
+        axes[0, 0].bar(x + width/2, chart_data[f'{prev_year}_MTD_Sales'], width, 
+                       label=str(prev_year), color='#A23B72', alpha=0.8)
+        axes[0, 0].set_title('MTD Sales by Sales Rep', fontsize=11, fontweight='bold')
+        axes[0, 0].set_ylabel('Sales Amount ($)')
+        axes[0, 0].set_xticks(x)
+        axes[0, 0].set_xticklabels(chart_reps, rotation=45, ha='right', fontsize=9)
+        axes[0, 0].legend(fontsize=9)
+        axes[0, 0].yaxis.set_major_formatter(plt.FuncFormatter(lambda v, p: f'${v/1000:.0f}K'))
+        axes[0, 0].grid(axis='y', alpha=0.3)
+        
+        # Chart 2: YTD Sales by Sales Rep
+        axes[0, 1].bar(x - width/2, chart_data[f'{target_year}_YTD_Sales'], width, 
+                       label=str(target_year), color='#2E86AB', alpha=0.8)
+        axes[0, 1].bar(x + width/2, chart_data[f'{prev_year}_YTD_Sales'], width, 
+                       label=str(prev_year), color='#A23B72', alpha=0.8)
+        axes[0, 1].set_title('YTD Sales by Sales Rep', fontsize=11, fontweight='bold')
+        axes[0, 1].set_ylabel('Sales Amount ($)')
+        axes[0, 1].set_xticks(x)
+        axes[0, 1].set_xticklabels(chart_reps, rotation=45, ha='right', fontsize=9)
+        axes[0, 1].legend(fontsize=9)
+        axes[0, 1].yaxis.set_major_formatter(plt.FuncFormatter(lambda v, p: f'${v/1000:.0f}K'))
+        axes[0, 1].grid(axis='y', alpha=0.3)
+        
+        # Chart 3: MTD % Achieved by Sales Rep
+        colors = ['#28a745' if v >= 100 else '#dc3545' for v in chart_data['MTD_Achieved_%']]
+        axes[1, 0].barh(chart_reps, chart_data['MTD_Achieved_%'], color=colors, alpha=0.8)
+        axes[1, 0].axvline(x=100, color='black', linestyle='--', linewidth=1)
+        axes[1, 0].set_title('MTD % Achieved by Sales Rep', fontsize=11, fontweight='bold')
+        axes[1, 0].set_xlabel('% Achieved')
+        for i, v in enumerate(chart_data['MTD_Achieved_%']):
+            axes[1, 0].text(v + 2, i, f'{v:.1f}%', va='center', fontsize=9)
+        axes[1, 0].grid(axis='x', alpha=0.3)
+        
+        # Chart 4: YTD % Achieved by Sales Rep
+        colors = ['#28a745' if v >= 100 else '#dc3545' for v in chart_data['YTD_Achieved_%']]
+        axes[1, 1].barh(chart_reps, chart_data['YTD_Achieved_%'], color=colors, alpha=0.8)
+        axes[1, 1].axvline(x=100, color='black', linestyle='--', linewidth=1)
+        axes[1, 1].set_title('YTD % Achieved by Sales Rep', fontsize=11, fontweight='bold')
+        axes[1, 1].set_xlabel('% Achieved')
+        for i, v in enumerate(chart_data['YTD_Achieved_%']):
+            axes[1, 1].text(v + 2, i, f'{v:.1f}%', va='center', fontsize=9)
+        axes[1, 1].grid(axis='x', alpha=0.3)
+        
+        plt.tight_layout()
+        
+        # Save chart to buffer
+        img_buffer = io.BytesIO()
+        fig.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
+        img_buffer.seek(0)
+        plt.close(fig)
+        
+        img = XLImage(img_buffer)
+        ws.add_image(img, f'A{chart_start_row}')
+    
+    # Save workbook to bytes
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    return output
+
+
 # Main processing
 if uploaded_file is not None:
-    # Check if brand mapping file is uploaded
+    # Check if all required files are uploaded
     if brand_mapping_file is None:
         st.warning("⚠️ **ItemMaster File Required**: Please upload the ItemMaster Excel file to generate brand reports. This is required because different brands may share the same first 3 letters in item numbers.")
+        st.stop()
+    
+    if sales_details_file is None:
+        st.warning("⚠️ **Sales Details File Required**: Please upload the Sales Details Excel file to generate customer channel reports.")
+        st.stop()
+    
+    if customer_list_file is None:
+        st.warning("⚠️ **Sales Customer List File Required**: Please upload the Sales Customer List Excel file with Channel column to generate customer channel reports.")
         st.stop()
     
     try:
@@ -1741,13 +3141,6 @@ if uploaded_file is not None:
                 all_items, target_month, target_year, comparison_year, month_name, 'YTD'
             )
             
-            # Generate PowerPoint presentation
-            ppt_output = create_powerpoint_presentation(
-                results_current, results_previous, target_month, target_year,
-                comparison_year, month_name, brand_mtd_df, brand_ytd_df,
-                sku_mtd_df, sku_ytd_df
-            )
-            
             # Data preview section
             st.markdown("---")
             st.markdown("## 🔍 Data Preview")
@@ -1829,6 +3222,138 @@ if uploaded_file is not None:
                         preview_sku_ytd_df = pd.DataFrame(preview_sku_ytd)
                         st.dataframe(preview_sku_ytd_df, use_container_width=True, hide_index=True)
             
+            # Customer Channel Performance Preview
+            st.markdown("### 👥 Customer Channel Performance")
+            
+            try:
+                channel_results = generate_top10_customers_by_channel(
+                    sales_details_file,
+                    customer_list_file,
+                    target_month,
+                    target_year
+                )
+                
+                if channel_results is not None:
+                    channel_excel_output = create_channel_customer_excel_report(
+                        channel_results, target_month, target_year, month_name
+                    )
+                    
+                    # Display channel summary
+                    channel_col = channel_results['channel_col']
+                    channel_metrics = channel_results['channel_metrics']
+                    prev_year = target_year - 1
+                    
+                    channel_preview = []
+                    for _, ch_row in channel_metrics.iterrows():
+                        if ch_row[channel_col] != 'Unknown':
+                            channel_preview.append({
+                                'Channel': ch_row[channel_col],
+                                'Customers': ch_row['Customer_Count'],
+                                f'{target_year} MTD': f"${ch_row[f'{target_year}_MTD_Sales']:,.2f}",
+                                f'{prev_year} MTD': f"${ch_row[f'{prev_year}_MTD_Sales']:,.2f}",
+                                'MTD %': f"{ch_row['MTD_Achieved_%']:.1f}%",
+                                f'{target_year} YTD': f"${ch_row[f'{target_year}_YTD_Sales']:,.2f}",
+                                f'{prev_year} YTD': f"${ch_row[f'{prev_year}_YTD_Sales']:,.2f}",
+                                'YTD %': f"{ch_row['YTD_Achieved_%']:.1f}%"
+                            })
+                    
+                    if channel_preview:
+                        channel_df_display = pd.DataFrame(channel_preview)
+                        st.dataframe(channel_df_display, use_container_width=True, hide_index=True)
+                    
+                    # Grand Total
+                    gt = channel_results['grand_total']
+                    mtd_sales_fmt = f"${gt[f'{target_year}_MTD_Sales']:,.2f}"
+                    ytd_sales_fmt = f"${gt[f'{target_year}_YTD_Sales']:,.2f}"
+                    st.markdown(f"""
+                    **Grand Total:** {gt['Customer_Count']} customers | 
+                    MTD: {mtd_sales_fmt} ({gt['MTD_Achieved_%']:.1f}% vs {prev_year}) | 
+                    YTD: {ytd_sales_fmt} ({gt['YTD_Achieved_%']:.1f}% vs {prev_year})
+                    """)
+                    
+                    st.success(f"✅ Channel report includes {len(channel_results['channels'])} channels with Top 10 MTD/YTD customers each")
+                else:
+                    channel_excel_output = None
+                    channel_results = None
+                    st.error("❌ Could not process channel customer data")
+            except Exception as e:
+                channel_excel_output = None
+                channel_results = None
+                st.error(f"❌ Error generating channel report: {str(e)}")
+            
+            # Sales Rep Performance Preview
+            st.markdown("### 👤 Sales Rep Performance")
+            
+            try:
+                # Read raw sales details for sales rep analysis
+                sales_details_df_raw = pd.read_excel(sales_details_file, header=None)
+                customer_df_for_rep = pd.read_excel(customer_list_file)
+                
+                sales_rep_results = generate_sales_rep_performance(
+                    sales_details_df_raw,
+                    customer_df_for_rep,
+                    target_month,
+                    target_year
+                )
+                
+                if sales_rep_results is not None:
+                    sales_rep_excel_output = create_sales_rep_excel_report(
+                        sales_rep_results, target_month, target_year, month_name
+                    )
+                    
+                    # Display sales rep summary
+                    rep_col = sales_rep_results['sales_rep_col']
+                    rep_metrics = sales_rep_results['sales_rep_metrics']
+                    prev_year = target_year - 1
+                    
+                    rep_preview = []
+                    for _, rep_row in rep_metrics.iterrows():
+                        if rep_row[rep_col] != 'Unassigned':
+                            rep_preview.append({
+                                'Sales Rep': rep_row[rep_col],
+                                'Customers': int(rep_row['Customer_Count']),
+                                f'{target_year} MTD': f"${rep_row[f'{target_year}_MTD_Sales']:,.2f}",
+                                f'{prev_year} MTD': f"${rep_row[f'{prev_year}_MTD_Sales']:,.2f}",
+                                'MTD %': f"{rep_row['MTD_Achieved_%']:.1f}%",
+                                f'{target_year} YTD': f"${rep_row[f'{target_year}_YTD_Sales']:,.2f}",
+                                f'{prev_year} YTD': f"${rep_row[f'{prev_year}_YTD_Sales']:,.2f}",
+                                'YTD %': f"{rep_row['YTD_Achieved_%']:.1f}%"
+                            })
+                    
+                    if rep_preview:
+                        rep_df_display = pd.DataFrame(rep_preview)
+                        st.dataframe(rep_df_display, use_container_width=True, hide_index=True)
+                    
+                    # Grand Total
+                    gt_rep = sales_rep_results['grand_total']
+                    rep_mtd_sales_fmt = f"${gt_rep[f'{target_year}_MTD_Sales']:,.2f}"
+                    rep_ytd_sales_fmt = f"${gt_rep[f'{target_year}_YTD_Sales']:,.2f}"
+                    st.markdown(f"""
+                    **Grand Total:** {gt_rep['Customer_Count']} customers | 
+                    MTD: {rep_mtd_sales_fmt} ({gt_rep['MTD_Achieved_%']:.1f}% vs {prev_year}) | 
+                    YTD: {rep_ytd_sales_fmt} ({gt_rep['YTD_Achieved_%']:.1f}% vs {prev_year})
+                    """)
+                    
+                    num_reps = len([r for _, r in rep_metrics.iterrows() if r[rep_col] != 'Unassigned'])
+                    st.success(f"✅ Sales Rep report includes {num_reps} sales representatives with MTD/YTD analysis")
+                else:
+                    sales_rep_excel_output = None
+                    sales_rep_results = None
+                    st.error("❌ Could not process sales rep data. Make sure the customer list has a 'Sales Rep' column.")
+            except Exception as e:
+                sales_rep_excel_output = None
+                sales_rep_results = None
+                st.error(f"❌ Error generating sales rep report: {str(e)}")
+            
+            # Generate PowerPoint presentation (after channel and sales rep data is available)
+            ppt_output = create_powerpoint_presentation(
+                results_current, results_previous, target_month, target_year,
+                comparison_year, month_name, brand_mtd_df, brand_ytd_df,
+                sku_mtd_df, sku_ytd_df, 
+                channel_results=channel_results,
+                sales_rep_results=sales_rep_results
+            )
+            
             # Additional info
             st.info(f"ℹ️ Processed {results_current['items_processed']} items with data for {target_year} | {total_brands} brands identified")
             
@@ -1837,7 +3362,7 @@ if uploaded_file is not None:
             st.markdown("## 📥 Download Reports")
             
             # Organized download tabs
-            tab1, tab2, tab3, tab4 = st.tabs(["📊 Summary Reports", "🏆 Brand Reports", "🏷️ SKU Reports", "📽️ PowerPoint"])
+            tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Summary Reports", "🏆 Brand Reports", "🏷️ SKU Reports", "👥 Customer Channel", "👤 Sales Rep", "📽️ PowerPoint"])
             
             with tab1:
                 st.markdown("### Sales Summary Report")
@@ -1915,6 +3440,38 @@ if uploaded_file is not None:
                         st.error("❌ Could not generate YTD SKU report")
             
             with tab4:
+                st.markdown("### 👥 Customer Channel Report")
+                st.markdown("Top 10 customers by channel with MTD/YTD analysis")
+                
+                if channel_excel_output:
+                    st.download_button(
+                        label="📥 Download Customer Channel Report",
+                        data=channel_excel_output,
+                        file_name=f"Top10_Customers_by_Channel_{month_name}_{target_year}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                    st.caption("✓ Includes channel summary and Top 10 MTD/YTD customers per channel")
+                else:
+                    st.error("❌ Could not generate channel customer report")
+            
+            with tab5:
+                st.markdown("### � Sales Rep Performance Report")
+                st.markdown("MTD/YTD performance analysis by Sales Rep with charts")
+                
+                if sales_rep_excel_output:
+                    st.download_button(
+                        label="📥 Download Sales Rep Report",
+                        data=sales_rep_excel_output,
+                        file_name=f"Sales_Rep_Performance_{month_name}_{target_year}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                    st.caption("✓ Includes sales rep summary with MTD/YTD metrics and performance charts")
+                else:
+                    st.error("❌ Could not generate sales rep report")
+            
+            with tab6:
                 st.markdown("### 📽️ PowerPoint Presentation")
                 st.markdown("""
                 **Comprehensive slide deck including:**
@@ -1922,6 +3479,8 @@ if uploaded_file is not None:
                 - MTD vs YTD performance charts
                 - Top 10 brands analysis (MTD & YTD)
                 - Top 20 SKUs breakdown (MTD & YTD)
+                - Channel sales performance summary
+                - Sales rep performance summary
                 - Professional formatting and visualizations
                 """)
                 
@@ -1942,7 +3501,7 @@ if uploaded_file is not None:
         st.error(f"❌ Error processing file: {str(e)}")
         st.exception(e)
 else:
-    st.info("👆 Please upload both required Excel files to get started")
+    st.info("👆 Please upload all required Excel files to get started")
     
     # Show sample information
     with st.expander("ℹ️ How to use this app"):
@@ -1952,16 +3511,22 @@ else:
         2. **Upload your ItemMaster file** (.xls or .xlsx format) - **Required**
            - This file should have "ItemId" and "Brand" columns
            - This is required for accurate brand identification in Top 10 Brands reports
-        3. **Configure settings** in the sidebar:
+        3. **Upload Sales Details file** (.xls or .xlsx format) - **Required**
+           - Contains transaction-level sales data
+        4. **Upload Sales Customer List file** (.xls or .xlsx format) - **Required**
+           - Contains customer information with Channel column
+        5. **Configure settings** in the sidebar:
            - Select target month for MTD calculations
            - Select target year for current data
            - Select comparison year for year-over-year analysis
-        4. **View the results** in the dashboard
-        5. **Download** the generated reports including:
+        6. **View the results** in the dashboard
+        7. **Download** the generated reports including:
            - Formatted summary table
            - Dashboard chart (4-panel visualization)
            - Top 10 Brands reports (MTD & YTD)
            - Top 20 SKUs reports (MTD & YTD)
+           - Top 10 Customers by Channel (MTD & YTD)
+           - Sales Rep Performance (MTD & YTD)
            - PowerPoint presentation
         
         ### Why is ItemMaster File Required?
@@ -1974,6 +3539,18 @@ else:
         - Should contain columns: Year, Period, Sales Amount, Cost of Sales
         - Items identified by alphanumeric codes
         - "Item Total:" rows separate different items
+        
+        ### Customer Channel Analysis:
+        The **Sales Details** and **Sales Customer List** files are used to generate:
+        - Channel-level MTD/YTD summary with charts
+        - Top 10 customers per channel for MTD and YTD
+        - YoY growth analysis by channel
+        
+        ### Sales Rep Performance:
+        The **Sales Details** and **Sales Customer List** files are also used to generate:
+        - Sales Rep MTD/YTD performance summary
+        - Performance charts comparing current vs previous year
+        - % Achieved and YoY Growth metrics by sales rep
         """)
 
 # Footer
