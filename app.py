@@ -100,11 +100,99 @@ month_name = month_names[target_month]
 
 # File uploader with better styling
 st.markdown("### 📁 Upload Your Data")
-uploaded_file = st.file_uploader(
-    "Choose your sales Excel file",
-    type=['xls', 'xlsx'],
-    help="Upload a .xls or .xlsx file containing your sales data"
-)
+
+col_upload1, col_upload2 = st.columns(2)
+
+with col_upload1:
+    uploaded_file = st.file_uploader(
+        "📊 Sales Summary File",
+        type=['xls', 'xlsx'],
+        help="Upload the sales summary Excel file (e.g., summary 1-10.xls)",
+        key="sales_file"
+    )
+
+with col_upload2:
+    brand_mapping_file = st.file_uploader(
+        "📋 Brand Mapping File (Optional)",
+        type=['xls', 'xlsx'],
+        help="Upload the NZ Sales Act + Fcst file containing ItemMaster sheet for brand names",
+        key="brand_file"
+    )
+
+def normalize_brand_name(brand_name):
+    """Normalize brand name for fuzzy matching - removes spaces, lowercases"""
+    if not brand_name:
+        return ''
+    # Remove all spaces and convert to lowercase for comparison
+    return re.sub(r'\s+', '', str(brand_name).lower().strip())
+
+def title_case_brand(brand_name):
+    """Convert brand name to Title Case (capitalize each word)"""
+    if not brand_name:
+        return ''
+    return ' '.join(word.capitalize() for word in str(brand_name).strip().split())
+
+def load_brand_mapping(brand_file):
+    """Load brand mapping from ItemMaster sheet in the brand mapping file"""
+    brand_map = {}  # ItemID -> Brand name
+    brand_normalized_map = {}  # Normalized brand -> Canonical brand name
+    
+    try:
+        excel_file = pd.ExcelFile(brand_file)
+        
+        # Look for ItemMaster sheet (case-insensitive)
+        item_master_sheet = None
+        for sheet in excel_file.sheet_names:
+            if sheet.lower() == 'itemmaster':
+                item_master_sheet = sheet
+                break
+        
+        if item_master_sheet is None:
+            st.warning("⚠️ ItemMaster sheet not found in the brand mapping file")
+            return brand_map, brand_normalized_map
+        
+        # Read the ItemMaster sheet
+        df = pd.read_excel(excel_file, sheet_name=item_master_sheet)
+        
+        # Find ItemId and Brand columns (based on actual file structure)
+        item_id_col = None
+        brand_col = None
+        
+        for col in df.columns:
+            col_lower = str(col).lower().strip()
+            if col_lower in ['itemid', 'item_id', 'item id', 'item']:
+                item_id_col = col
+            elif col_lower == 'brand':
+                brand_col = col
+        
+        if item_id_col is None or brand_col is None:
+            st.warning(f"⚠️ Could not find ItemId or Brand columns in ItemMaster sheet. Found columns: {list(df.columns)}")
+            return brand_map, brand_normalized_map
+        
+        # Build mapping: ItemID -> Brand (with Title Case)
+        # Also build normalized brand map for fuzzy matching
+        for _, row in df.iterrows():
+            item_id = str(row[item_id_col]).strip() if pd.notna(row[item_id_col]) else ''
+            brand = str(row[brand_col]).strip() if pd.notna(row[brand_col]) else ''
+            if item_id and brand:
+                # Normalize and title case the brand name
+                normalized = normalize_brand_name(brand)
+                title_brand = title_case_brand(brand)
+                
+                # If we've seen this normalized brand before, use the canonical version
+                if normalized in brand_normalized_map:
+                    title_brand = brand_normalized_map[normalized]
+                else:
+                    brand_normalized_map[normalized] = title_brand
+                
+                brand_map[item_id.upper()] = title_brand
+        
+        st.success(f"✅ Loaded {len(brand_map)} brand mappings from ItemMaster ({len(brand_normalized_map)} unique brands)")
+        
+    except Exception as e:
+        st.warning(f"⚠️ Error loading brand mapping: {str(e)}")
+    
+    return brand_map, brand_normalized_map
 
 def split_by_items(df):
     """Split dataframe by item numbers"""
@@ -810,25 +898,63 @@ def get_sku_code_and_name(item_df):
 
     return code.strip(), name.strip()
 
-def create_brand_report(all_items, target_month, target_year, comparison_year, month_name, report_type='MTD'):
+def create_brand_report(all_items, target_month, target_year, comparison_year, month_name, report_type='MTD', brand_mapping=None, brand_normalized_map=None):
     """Create Top-10 Brand MTD or YTD Performance report (excludes MX brand)"""
     
-    # Group items by brand code (exclude MX brand)
+    if brand_mapping is None:
+        brand_mapping = {}
+    if brand_normalized_map is None:
+        brand_normalized_map = {}
+    
+    # Group items by brand name from mapping, or by brand code if not mapped
+    # Use normalized names for grouping to handle variations like "SunRice", "Sun Rice", "Sunrice"
     brands = defaultdict(list)
+    brand_display_names = {}  # normalized_name -> display_name (Title Case)
     
     for item_key, item_df in all_items.items():
+        # Extract item code from item_key (format: "SheetName_ItemCode")
+        item_code = str(item_key).split('_')[-1].upper()
         brand_code = extract_brand_code(item_key)
+        
         # Skip MX brand from reports
         if brand_code == 'MX':
             continue
-        brands[brand_code].append((item_key, item_df))
+        
+        # Look up brand name from mapping using item code
+        brand_name = brand_mapping.get(item_code, None)
+        
+        # If not found, fallback to brand code with Title Case
+        if not brand_name:
+            brand_name = title_case_brand(brand_code)
+        
+        # Normalize the brand name for grouping (handles SunRice, Sun Rice, Sunrice as same)
+        normalized_brand = normalize_brand_name(brand_name)
+        
+        # Check if we have a canonical name for this normalized brand
+        if normalized_brand in brand_normalized_map:
+            display_name = brand_normalized_map[normalized_brand]
+        elif normalized_brand in brand_display_names:
+            display_name = brand_display_names[normalized_brand]
+        else:
+            display_name = title_case_brand(brand_name)
+            brand_display_names[normalized_brand] = display_name
+        
+        # Group by normalized name
+        brands[normalized_brand].append((item_key, item_df, brand_code, display_name))
     
     # Aggregate per brand
     brand_metrics = []
-    for brand_code, items in brands.items():
+    for normalized_brand, items in brands.items():
+        # Get the display name (first item's display name, they should all be the same)
+        display_name = items[0][3] if items else normalized_brand
+        
+        # Get the most common brand_code for this brand (for reference)
+        brand_codes = [bc for _, _, bc, _ in items]
+        most_common_code = max(set(brand_codes), key=brand_codes.count) if brand_codes else display_name
+        
         agg = {
-            'brand_code': brand_code,
-            'brand_name': None,
+            'brand_code': most_common_code,
+            'brand_name': display_name,
             f'{target_year}_mtd_sales': 0.0,
             f'{target_year}_mtd_cost': 0.0,
             f'{target_year}_ytd_sales': 0.0,
@@ -838,9 +964,8 @@ def create_brand_report(all_items, target_month, target_year, comparison_year, m
             f'{comparison_year}_ytd_sales': 0.0,
             f'{comparison_year}_ytd_cost': 0.0,
         }
-        desc_sets = []
         
-        for item_key, item_df in items:
+        for item_key, item_df, _, _ in items:
             metrics_current = compute_item_year_metrics(item_df, target_year, target_month)
             metrics_previous = compute_item_year_metrics(item_df, comparison_year, target_month)
             
@@ -852,40 +977,6 @@ def create_brand_report(all_items, target_month, target_year, comparison_year, m
             agg[f'{comparison_year}_mtd_cost'] += metrics_previous['mtd_cost']
             agg[f'{comparison_year}_ytd_sales'] += metrics_previous['ytd_sales']
             agg[f'{comparison_year}_ytd_cost'] += metrics_previous['ytd_cost']
-            
-            desc = metrics_current.get('desc') or metrics_previous.get('desc')
-            if desc:
-                words = [w.strip().upper() for w in re.split(r'\s+', str(desc)) if w.strip()]
-                first3 = words[:3]
-                if first3:
-                    desc_sets.append(set(first3))
-        
-        # Determine brand name from common words
-        if desc_sets:
-            common = set.intersection(*desc_sets) if len(desc_sets) > 1 else desc_sets[0]
-            if common:
-                sample_desc = None
-                for _, df in items:
-                    for col in df.columns:
-                        if any(k in str(col).lower() for k in ['description','item','name']):
-                            non_nulls = df[col].dropna().astype(str)
-                            if len(non_nulls):
-                                sample_desc = non_nulls.iloc[0]
-                                break
-                    if sample_desc:
-                        break
-                if sample_desc:
-                    sample_words = [w.strip() for w in re.split(r'\s+', sample_desc) if w.strip()]
-                    brand_words = [w for w in sample_words[:3] if w.upper() in common]
-                    brand_name = ' '.join(brand_words)
-                else:
-                    brand_name = ' '.join(list(common))
-            else:
-                brand_name = brand_code
-        else:
-            brand_name = brand_code
-        
-        agg['brand_name'] = brand_name
         
         # Compute GP%
         def compute_gp(sales, cost):
@@ -1529,6 +1620,12 @@ if uploaded_file is not None:
             </div>
             """, unsafe_allow_html=True)
             
+            # Load brand mapping if brand mapping file is uploaded
+            brand_mapping = {}
+            brand_normalized_map = {}
+            if brand_mapping_file is not None:
+                brand_mapping, brand_normalized_map = load_brand_mapping(brand_mapping_file)
+            
             # Calculate metrics
             results_current = calculate_sales_metrics(all_items, target_month, target_year)
             results_previous = calculate_sales_metrics(all_items, target_month, comparison_year)
@@ -1630,11 +1727,11 @@ if uploaded_file is not None:
             )
             
             brand_mtd_output, brand_mtd_df, total_brands = create_brand_report(
-                all_items, target_month, target_year, comparison_year, month_name, 'MTD'
+                all_items, target_month, target_year, comparison_year, month_name, 'MTD', brand_mapping, brand_normalized_map
             )
             
             brand_ytd_output, brand_ytd_df, _ = create_brand_report(
-                all_items, target_month, target_year, comparison_year, month_name, 'YTD'
+                all_items, target_month, target_year, comparison_year, month_name, 'YTD', brand_mapping, brand_normalized_map
             )
             
             sku_mtd_output, sku_mtd_df = create_sku_report(
