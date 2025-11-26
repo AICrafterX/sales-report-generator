@@ -3261,16 +3261,6 @@ if uploaded_file is not None:
                         channel_df_display = pd.DataFrame(channel_preview)
                         st.dataframe(channel_df_display, use_container_width=True, hide_index=True)
                     
-                    # Grand Total
-                    gt = channel_results['grand_total']
-                    mtd_sales_fmt = f"${gt[f'{target_year}_MTD_Sales']:,.2f}"
-                    ytd_sales_fmt = f"${gt[f'{target_year}_YTD_Sales']:,.2f}"
-                    st.markdown(f"""
-                    **Grand Total:** {gt['Customer_Count']} customers | 
-                    MTD: {mtd_sales_fmt} ({gt['MTD_Achieved_%']:.1f}% vs {prev_year}) | 
-                    YTD: {ytd_sales_fmt} ({gt['YTD_Achieved_%']:.1f}% vs {prev_year})
-                    """)
-                    
                     st.success(f"✅ Channel report includes {len(channel_results['channels'])} channels with Top 10 MTD/YTD customers each")
                 else:
                     channel_excel_output = None
@@ -3323,16 +3313,6 @@ if uploaded_file is not None:
                     if rep_preview:
                         rep_df_display = pd.DataFrame(rep_preview)
                         st.dataframe(rep_df_display, use_container_width=True, hide_index=True)
-                    
-                    # Grand Total
-                    gt_rep = sales_rep_results['grand_total']
-                    rep_mtd_sales_fmt = f"${gt_rep[f'{target_year}_MTD_Sales']:,.2f}"
-                    rep_ytd_sales_fmt = f"${gt_rep[f'{target_year}_YTD_Sales']:,.2f}"
-                    st.markdown(f"""
-                    **Grand Total:** {gt_rep['Customer_Count']} customers | 
-                    MTD: {rep_mtd_sales_fmt} ({gt_rep['MTD_Achieved_%']:.1f}% vs {prev_year}) | 
-                    YTD: {rep_ytd_sales_fmt} ({gt_rep['YTD_Achieved_%']:.1f}% vs {prev_year})
-                    """)
                     
                     num_reps = len([r for _, r in rep_metrics.iterrows() if r[rep_col] != 'Unassigned'])
                     st.success(f"✅ Sales Rep report includes {num_reps} sales representatives with MTD/YTD analysis")
