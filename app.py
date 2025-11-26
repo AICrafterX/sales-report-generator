@@ -520,7 +520,7 @@ def compute_item_year_metrics(item_df, year, month):
     return {'mtd_sales':mtd_sales,'mtd_cost':mtd_cost,'ytd_sales':ytd_sales,'ytd_cost':ytd_cost,'desc':desc_val}
 
 def create_sku_report(all_items, target_month, target_year, comparison_year, month_name, report_type='MTD'):
-    """Create Top-20 SKU MTD or YTD Performance report (excludes MX products)"""
+    """Create Top-20 SKU MTD or YTD Performance report (excludes MX and MEI products)"""
     
     # Collect all SKUs with their metrics
     sku_metrics = []
@@ -534,7 +534,10 @@ def create_sku_report(all_items, target_month, target_year, comparison_year, mon
             continue
 
         brand_code = extract_brand_code(sku_code)
+        # Skip MX brand and items starting with MEI
         if brand_code == 'MX':
+            continue
+        if sku_code.upper().startswith('MEI'):
             continue
         
         # Compute metrics for both years
