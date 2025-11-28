@@ -64,8 +64,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Header
-st.markdown('<p class="main-header">📊 Sales Report Generator</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Comprehensive sales analytics with MTD/YTD metrics, brand performance, and SKU insights</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-header">📊 Sales Performance Analytics</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">Advanced sales reporting with MTD/YTD metrics, budget tracking, brand analysis, and customer insights</p>', unsafe_allow_html=True)
 
 # Sidebar for configuration
 with st.sidebar:
@@ -80,8 +80,8 @@ with st.sidebar:
     st.markdown("### 📖 Instructions")
     st.markdown("""
     1. Upload your Sales Summary Excel file
-    2. Upload your ItemMaster Excel file (required)
-    3. (Optional) Upload Sales Details & Customer List
+    2. Upload your Item Master Excel file (required)
+    3. Upload Sales Details & Customer List
     4. Review key performance metrics
     5. Download detailed reports
     6. Analyze brand, SKU, and customer performance
@@ -93,7 +93,7 @@ with st.sidebar:
     - **Sales Summary**: Overall performance
     - **Top 10 Brands**: MTD & YTD rankings
     - **Top 20 SKUs**: Product-level insights
-    - **Customer Channel**: Top 10 by channel (optional)
+    - **Customer Channel**: Top 10 by channel
     """)
 
 # Month names for display
@@ -109,7 +109,7 @@ col_upload1, col_upload2 = st.columns(2)
 
 with col_upload1:
     uploaded_file = st.file_uploader(
-        "📊 Sales Summary File",
+        "📊 Sales Summary File (Required)",
         type=['xls', 'xlsx'],
         help="Upload the sales summary Excel file (e.g., summary 1-10.xls)",
         key="sales_file"
@@ -117,9 +117,9 @@ with col_upload1:
 
 with col_upload2:
     brand_mapping_file = st.file_uploader(
-        "📋 ItemMaster File (Required)",
+        "📋 Item Master File (Required)",
         type=['xls', 'xlsx'],
-        help="Upload the ItemMaster Excel file containing ItemId and Brand columns. Required for accurate brand identification.",
+        help="Upload the Item Master Excel file containing ItemId and Brand columns. Required for accurate brand identification.",
         key="brand_file"
     )
 
@@ -3712,4 +3712,4 @@ else:
 
 # Footer
 st.markdown("---")
-st.markdown("Built with Streamlit 🎈 | Sales Report Generator v1.0")
+st.markdown("Sales Report Generator v1.0")
