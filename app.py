@@ -142,6 +142,14 @@ with col_upload4:
         key="customer_list_file"
     )
 
+# Budget file for MTD/YTD budget calculation
+budget_file = st.file_uploader(
+    "💰 Budget File (Optional)",
+    type=['xls', 'xlsx'],
+    help="Upload the Budget Excel file containing monthly budget data. Used to calculate MTD and YTD budget amounts.",
+    key="budget_file"
+)
+
 def normalize_brand_name(brand_name):
     """Normalize brand name for fuzzy matching - removes spaces, lowercases"""
     if not brand_name:
@@ -204,6 +212,110 @@ def load_brand_mapping(brand_file):
     
     return brand_map, brand_normalized_map
 
+def load_budget_data(budget_file, target_month):
+    """Load budget data from Excel file and calculate MTD/YTD budget"""
+    budget_data = {
+        'mtd_budget': 0,
+        'ytd_budget': 0,
+        'loaded': False
+    }
+    
+    try:
+        # Read the budget file
+        df = pd.read_excel(budget_file, header=None)
+        
+        if df.empty:
+            st.warning("⚠️ Budget file is empty")
+            return budget_data
+        
+        # Find the row with budget values (look for numeric values in columns)
+        budget_row = None
+        period_cols = {}  # Map period number to column index
+        total_budget_col = None
+        
+        # First, find the header row that contains period numbers or month names
+        for row_idx in range(min(5, len(df))):
+            row_values = df.iloc[row_idx].tolist()
+            
+            # Check if this row contains period numbers (1, 2, 3, etc.)
+            period_count = 0
+            for col_idx, val in enumerate(row_values):
+                try:
+                    val_int = int(float(val)) if pd.notna(val) else None
+                    if val_int is not None and 1 <= val_int <= 12:
+                        period_cols[val_int] = col_idx
+                        period_count += 1
+                except (ValueError, TypeError):
+                    # Check for "FY" or "Budget" or "Total" keywords for total budget column
+                    val_str = str(val).lower() if pd.notna(val) else ''
+                    if 'fy' in val_str or 'total' in val_str or val_str == 'budget':
+                        total_budget_col = col_idx
+            
+            if period_count >= 6:  # Found at least 6 months, likely the period row
+                break
+        
+        # Now find the row with actual budget values (numeric row after headers)
+        for row_idx in range(len(df)):
+            row_values = df.iloc[row_idx].tolist()
+            numeric_count = 0
+            for val in row_values:
+                try:
+                    if pd.notna(val) and isinstance(val, (int, float)) and val > 1000:
+                        numeric_count += 1
+                except (ValueError, TypeError):
+                    pass
+            
+            if numeric_count >= 6:  # Found row with many large numbers
+                budget_row = row_idx
+                break
+        
+        if budget_row is None or not period_cols:
+            st.warning("⚠️ Could not detect budget structure in file")
+            return budget_data
+        
+        # Calculate MTD budget (sum of months 1 to target_month)
+        mtd_budget = 0
+        for month in range(1, target_month + 1):
+            if month in period_cols:
+                col_idx = period_cols[month]
+                val = df.iloc[budget_row, col_idx]
+                if pd.notna(val):
+                    try:
+                        mtd_budget += float(val)
+                    except (ValueError, TypeError):
+                        pass
+        
+        # Calculate YTD budget (use total column if available, otherwise sum all months)
+        ytd_budget = 0
+        if total_budget_col is not None:
+            val = df.iloc[budget_row, total_budget_col]
+            if pd.notna(val):
+                try:
+                    ytd_budget = float(val)
+                except (ValueError, TypeError):
+                    ytd_budget = 0
+        
+        if ytd_budget == 0:
+            # Sum all months
+            for month, col_idx in period_cols.items():
+                val = df.iloc[budget_row, col_idx]
+                if pd.notna(val):
+                    try:
+                        ytd_budget += float(val)
+                    except (ValueError, TypeError):
+                        pass
+        
+        budget_data['mtd_budget'] = mtd_budget
+        budget_data['ytd_budget'] = ytd_budget
+        budget_data['loaded'] = True
+        
+        st.success(f"✅ Loaded budget data: MTD Budget = ${mtd_budget:,.2f}, YTD Budget = ${ytd_budget:,.2f}")
+        
+    except Exception as e:
+        st.warning(f"⚠️ Error loading budget data: {str(e)}")
+    
+    return budget_data
+
 def split_by_items(df):
     """Split dataframe by item numbers"""
     items_dict = {}
@@ -257,11 +369,13 @@ def split_by_items(df):
     return items_dict
 
 def calculate_sales_metrics(all_items, target_month, target_year):
-    """Calculate MTD and YTD sales metrics"""
+    """Calculate MTD and YTD sales metrics (Net Sales = Sales Amount - Sales Returns)"""
     mtd_sales = 0
     mtd_cost = 0
+    mtd_returns = 0
     ytd_sales = 0
     ytd_cost = 0
+    ytd_returns = 0
     items_with_data = 0
     
     for item_key, item_df in all_items.items():
@@ -275,6 +389,7 @@ def calculate_sales_metrics(all_items, target_month, target_year):
         period_col = None
         sales_col = None
         cost_col = None
+        returns_col = None
         
         for col in df.columns:
             col_lower = str(col).strip().lower()
@@ -286,6 +401,8 @@ def calculate_sales_metrics(all_items, target_month, target_year):
                 sales_col = col
             elif 'cost of sales' in col_lower and not cost_col:
                 cost_col = col
+            elif 'sales returns' in col_lower and not returns_col:
+                returns_col = col
         
         if not year_col or not period_col or not sales_col:
             continue
@@ -296,6 +413,8 @@ def calculate_sales_metrics(all_items, target_month, target_year):
         df[sales_col] = pd.to_numeric(df[sales_col], errors='coerce').fillna(0)
         if cost_col:
             df[cost_col] = pd.to_numeric(df[cost_col], errors='coerce').fillna(0)
+        if returns_col:
+            df[returns_col] = pd.to_numeric(df[returns_col], errors='coerce').fillna(0)
         
         year_data = df[df[year_col] == target_year].copy()
         
@@ -307,25 +426,33 @@ def calculate_sales_metrics(all_items, target_month, target_year):
             mtd_sales += mtd_data[sales_col].sum()
             if cost_col:
                 mtd_cost += mtd_data[cost_col].sum()
+            if returns_col:
+                mtd_returns += mtd_data[returns_col].sum()
             
             # YTD
             ytd_data = year_data[year_data[period_col] <= target_month]
             ytd_sales += ytd_data[sales_col].sum()
             if cost_col:
                 ytd_cost += ytd_data[cost_col].sum()
+            if returns_col:
+                ytd_returns += ytd_data[returns_col].sum()
     
-    mtd_gp = ((mtd_sales - mtd_cost) / mtd_sales * 100) if mtd_sales > 0 else 0
-    ytd_gp = ((ytd_sales - ytd_cost) / ytd_sales * 100) if ytd_sales > 0 else 0
+    # Net Sales = Sales Amount - Sales Returns
+    mtd_net_sales = mtd_sales - mtd_returns
+    ytd_net_sales = ytd_sales - ytd_returns
+    
+    mtd_gp = ((mtd_net_sales - mtd_cost) / mtd_net_sales * 100) if mtd_net_sales > 0 else 0
+    ytd_gp = ((ytd_net_sales - ytd_cost) / ytd_net_sales * 100) if ytd_net_sales > 0 else 0
     
     return {
-        'MTD Gross Sales': mtd_sales,
+        'MTD Gross Sales': mtd_net_sales,
         'MTD GP%': mtd_gp,
-        'YTD Gross Sales': ytd_sales,
+        'YTD Gross Sales': ytd_net_sales,
         'YTD GP%': ytd_gp,
         'items_processed': items_with_data
     }
 
-def create_excel_report(results_current, results_previous, target_month, target_year, comparison_year, month_name):
+def create_excel_report(results_current, results_previous, target_month, target_year, comparison_year, month_name, budget_data=None):
     """Create Excel report with formatted table and charts"""
     
     # Calculate % achieved
@@ -333,6 +460,14 @@ def create_excel_report(results_current, results_previous, target_month, target_
     ytd_achieved = (results_current['YTD Gross Sales'] / results_previous['YTD Gross Sales'] * 100) if results_previous['YTD Gross Sales'] > 0 else 0
     mtd_gp_achieved = "0%" if results_previous['MTD GP%'] == 0 else f"{(results_current['MTD GP%'] / results_previous['MTD GP%'] * 100):.0f}%"
     ytd_gp_achieved = "0%" if results_previous['YTD GP%'] == 0 else f"{(results_current['YTD GP%'] / results_previous['YTD GP%'] * 100):.0f}%"
+    
+    # Budget data - use provided data or defaults
+    mtd_budget = budget_data['mtd_budget'] if budget_data and budget_data.get('loaded') else 0
+    ytd_budget = budget_data['ytd_budget'] if budget_data and budget_data.get('loaded') else 0
+    
+    # Calculate % achieved vs budget
+    mtd_budget_achieved = (results_current['MTD Gross Sales'] / mtd_budget * 100) if mtd_budget > 0 else 0
+    ytd_budget_achieved = (results_current['YTD Gross Sales'] / ytd_budget * 100) if ytd_budget > 0 else 0
     
     # Create workbook
     wb = Workbook()
@@ -385,8 +520,12 @@ def create_excel_report(results_current, results_previous, target_month, target_
          float(mtd_gp_achieved.rstrip('%')) / 100 if mtd_gp_achieved != "0%" else 0,
          ytd_achieved / 100 if results_previous['YTD Gross Sales'] > 0 else 0,
          float(ytd_gp_achieved.rstrip('%')) / 100 if ytd_gp_achieved != "0%" else 0],
-        [f'{target_year} Budget', '', '', '', ''],
-        ['% Achieved', 0, 0, 0, 0]
+        [f'{target_year} Budget', mtd_budget if mtd_budget > 0 else '', '', ytd_budget if ytd_budget > 0 else '', ''],
+        ['% Achieved', 
+         mtd_budget_achieved / 100 if mtd_budget > 0 else 0, 
+         float(mtd_gp_achieved.rstrip('%')) / 100 if mtd_gp_achieved != "0%" else 0, 
+         ytd_budget_achieved / 100 if ytd_budget > 0 else 0, 
+         float(ytd_gp_achieved.rstrip('%')) / 100 if ytd_gp_achieved != "0%" else 0]
     ]
     
     # Write data rows
@@ -398,16 +537,27 @@ def create_excel_report(results_current, results_previous, target_month, target_
             
             if row_data[0] == str(target_year):
                 cell.fill = row_current_fill
-            elif '%Achieved' in row_data[0]:
+            elif '%Achieved' in str(row_data[0]) or '% Achieved' in str(row_data[0]):
                 cell.fill = row_achieved_fill
-            elif 'Budget' in row_data[0]:
+            elif 'Budget' in str(row_data[0]):
                 cell.fill = row_budget_fill
             
             if col_idx > 1 and value != '':
-                if col_idx in [2, 4]:
-                    cell.number_format = '$#,##0.00'
-                elif col_idx in [3, 5]:
+                # For %Achieved rows, all numeric columns should be percentage format
+                if '%Achieved' in str(row_data[0]) or '% Achieved' in str(row_data[0]):
                     cell.number_format = '0.00%'
+                # For Budget row, columns 2 and 4 are currency
+                elif 'Budget' in str(row_data[0]):
+                    if col_idx in [2, 4]:
+                        cell.number_format = '$#,##0.00'
+                    elif col_idx in [3, 5]:
+                        cell.number_format = '0.00%'
+                # For year rows (2025, 2024), columns 2,4 = currency, 3,5 = percentage
+                else:
+                    if col_idx in [2, 4]:
+                        cell.number_format = '$#,##0.00'
+                    elif col_idx in [3, 5]:
+                        cell.number_format = '0.00%'
     
     # Set column widths
     ws.column_dimensions['A'].width = 15
@@ -567,13 +717,14 @@ def extract_brand_code(item_key):
     return m.group(1).upper() if m else code.upper()
 
 def compute_item_year_metrics(item_df, year, month):
-    """Compute metrics for a single item dataframe and a given year"""
+    """Compute metrics for a single item dataframe and a given year (Net Sales = Sales Amount - Sales Returns)"""
     df = item_df.copy()
     year_col = None
     period_col = None
     sales_col = None
     cost_col = None
     desc_col = None
+    returns_col = None
     
     for col in df.columns:
         col_lower = str(col).strip().lower()
@@ -585,6 +736,8 @@ def compute_item_year_metrics(item_df, year, month):
             sales_col = col
         elif 'cost of sales' in col_lower and not cost_col:
             cost_col = col
+        elif 'sales returns' in col_lower and not returns_col:
+            returns_col = col
         elif any(k in col_lower for k in ['description','item','name']) and not desc_col:
             desc_col = col
 
@@ -596,6 +749,8 @@ def compute_item_year_metrics(item_df, year, month):
     df[sales_col] = pd.to_numeric(df[sales_col], errors='coerce').fillna(0)
     if cost_col:
         df[cost_col] = pd.to_numeric(df[cost_col], errors='coerce').fillna(0)
+    if returns_col:
+        df[returns_col] = pd.to_numeric(df[returns_col], errors='coerce').fillna(0)
 
     year_data = df[df[year_col] == year]
     if year_data.empty:
@@ -605,9 +760,15 @@ def compute_item_year_metrics(item_df, year, month):
     ytd_data = year_data[year_data[period_col] <= month]
 
     mtd_sales = float(mtd_data[sales_col].sum())
+    mtd_returns = float(mtd_data[returns_col].sum()) if returns_col else 0.0
     mtd_cost = float(mtd_data[cost_col].sum()) if cost_col else 0.0
     ytd_sales = float(ytd_data[sales_col].sum())
+    ytd_returns = float(ytd_data[returns_col].sum()) if returns_col else 0.0
     ytd_cost = float(ytd_data[cost_col].sum()) if cost_col else 0.0
+    
+    # Net Sales = Sales Amount - Sales Returns
+    mtd_net_sales = mtd_sales - mtd_returns
+    ytd_net_sales = ytd_sales - ytd_returns
 
     desc_val = None
     if desc_col is not None:
@@ -615,7 +776,7 @@ def compute_item_year_metrics(item_df, year, month):
         if len(non_nulls):
             desc_val = non_nulls.iloc[0]
 
-    return {'mtd_sales':mtd_sales,'mtd_cost':mtd_cost,'ytd_sales':ytd_sales,'ytd_cost':ytd_cost,'desc':desc_val}
+    return {'mtd_sales':mtd_net_sales,'mtd_cost':mtd_cost,'ytd_sales':ytd_net_sales,'ytd_cost':ytd_cost,'desc':desc_val}
 
 def create_sku_report(all_items, target_month, target_year, comparison_year, month_name, report_type='MTD'):
     """Create Top-20 SKU MTD or YTD Performance report (excludes MX and MEI products)"""
@@ -1792,6 +1953,7 @@ def generate_top10_customers_by_channel(
     
     col_period = 1
     col_sales_amount = 17
+    col_sales_returns = 20  # Sales Returns column
     
     data_rows = []
     current_customer = None
@@ -1825,16 +1987,20 @@ def generate_top10_customers_by_channel(
                     month = None
             
             sales_amount = row.iloc[col_sales_amount]
+            sales_returns = row.iloc[col_sales_returns] if len(row) > col_sales_returns else 0
             
             if pd.notna(sales_amount) and current_customer and month is not None:
                 try:
                     sales_value = float(sales_amount)
+                    returns_value = float(sales_returns) if pd.notna(sales_returns) else 0
+                    # Net Sales = Sales Amount - Sales Returns
+                    net_sales = sales_value - returns_value
                     data_rows.append({
                         'Customer #': current_customer,
                         'Customer Name': current_customer_name,
                         'Year': year,
                         'Month': month,
-                        'Sales Amount': sales_value
+                        'Sales Amount': net_sales
                     })
                 except (ValueError, TypeError):
                     pass
@@ -2546,6 +2712,7 @@ def generate_sales_rep_performance(sales_df_raw, customer_df, target_month, targ
     # ============================================================
     col_period = 1
     col_sales_amount = 17
+    col_sales_returns = 20  # Sales Returns column
     
     data_rows = []
     current_customer = None
@@ -2579,16 +2746,20 @@ def generate_sales_rep_performance(sales_df_raw, customer_df, target_month, targ
                     month = None
             
             sales_amount = row.iloc[col_sales_amount]
+            sales_returns = row.iloc[col_sales_returns] if len(row) > col_sales_returns else 0
             
             if pd.notna(sales_amount) and current_customer and month is not None:
                 try:
                     sales_value = float(sales_amount)
+                    returns_value = float(sales_returns) if pd.notna(sales_returns) else 0
+                    # Net Sales = Sales Amount - Sales Returns
+                    net_sales = sales_value - returns_value
                     data_rows.append({
                         'Customer #': current_customer,
                         'Customer Name': current_customer_name,
                         'Year': year,
                         'Month': month,
-                        'Sales Amount': sales_value
+                        'Sales Amount': net_sales
                     })
                 except (ValueError, TypeError):
                     pass
@@ -3025,6 +3196,11 @@ if uploaded_file is not None:
             if brand_mapping_file is not None:
                 brand_mapping, brand_normalized_map = load_brand_mapping(brand_mapping_file)
             
+            # Load budget data if budget file is uploaded
+            budget_data = None
+            if budget_file is not None:
+                budget_data = load_budget_data(budget_file, target_month)
+            
             # Calculate metrics
             results_current = calculate_sales_metrics(all_items, target_month, target_year)
             results_previous = calculate_sales_metrics(all_items, target_month, comparison_year)
@@ -3122,7 +3298,8 @@ if uploaded_file is not None:
                 target_month, 
                 target_year, 
                 comparison_year,
-                month_name
+                month_name,
+                budget_data
             )
             
             brand_mtd_output, brand_mtd_df, total_brands = create_brand_report(
