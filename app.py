@@ -9,6 +9,7 @@ import io
 import tempfile
 import os
 import re
+import calendar
 from collections import defaultdict
 from pptx import Presentation
 from pptx.util import Inches, Pt
@@ -77,6 +78,17 @@ with st.sidebar:
     comparison_year = st.number_input("📆 Comparison Year", 2020, 2030, 2024, step=1, help="Previous year for comparison")
     
     st.markdown("---")
+    st.markdown("### 📅 Weekly Performance")
+    weekly_target_month = st.selectbox(
+        "Select Month for Weekly Analysis",
+        options=list(range(1, 13)),
+        index=9,  # Default to October (index 9 = month 10)
+        format_func=lambda x: ["January", "February", "March", "April", "May", "June", 
+                               "July", "August", "September", "October", "November", "December"][x-1],
+        help="Select the month to analyze weekly sales rep performance"
+    )
+    
+    st.markdown("---")
     st.markdown("### 📖 Instructions")
     st.markdown("""
     1. Upload your Sales Summary Excel file
@@ -128,7 +140,7 @@ col_upload3, col_upload4 = st.columns(2)
 
 with col_upload3:
     sales_details_file = st.file_uploader(
-        "📋 Sales Details File (Required)",
+        "📋 Yearly Sales Details File (Required)",
         type=['xls', 'xlsx'],
         help="Upload the Sales Details Excel file (e.g., sales detail 2024-2025.xls). Contains detailed transaction data.",
         key="sales_details_file"
@@ -144,11 +156,30 @@ with col_upload4:
 
 # Budget file for MTD/YTD budget calculation
 budget_file = st.file_uploader(
-    "💰 Budget File (Optional)",
+    "💰 Company Budget File (Optional)",
     type=['xls', 'xlsx'],
     help="Upload the Budget Excel file containing monthly budget data. Used to calculate MTD and YTD budget amounts.",
     key="budget_file"
 )
+
+# Additional files for weekly sales rep performance
+col_upload5, col_upload6 = st.columns(2)
+
+with col_upload5:
+    monthly_sales_file = st.file_uploader(
+        "📅 Monthly Sales Details File (Optional)",
+        type=['xls', 'xlsx'],
+        help="Upload the Monthly Sales Details Excel file. Contains weekly transaction data for the current month.",
+        key="monthly_sales_file"
+    )
+
+with col_upload6:
+    sales_budget_file = st.file_uploader(
+        "💵 Sales Budget File (Optional)",
+        type=['xls', 'xlsx'],
+        help="Upload the Sales Budget Excel file. Contains monthly budget allocation for each sales rep.",
+        key="sales_budget_file"
+    )
 
 def normalize_brand_name(brand_name):
     """Normalize brand name for fuzzy matching - removes spaces, lowercases"""
@@ -2898,6 +2929,452 @@ def generate_sales_rep_performance(sales_df_raw, customer_df, target_month, targ
     }
 
 
+def generate_sales_rep_weekly_performance(monthly_sales_df_raw, sales_budget_df, customer_df, target_month, target_year):
+    """
+    Generate weekly performance report for each Sales Rep comparing actual sales vs monthly budget.
+    
+    Args:
+        monthly_sales_df_raw: Raw monthly sales details DataFrame
+        sales_budget_df: Sales budget DataFrame with budget allocation for each sales rep
+        customer_df: Customer list DataFrame with Sales Rep column
+        target_month: Target month for analysis
+        target_year: Target year for analysis
+    
+    Returns:
+        Dictionary with weekly sales rep performance data including:
+        - sales_rep_weekly_metrics: DataFrame with actual sales, budget, and % completion
+        - total_summary: Overall totals
+        - sales_rep_col: Name of the sales rep column
+    """
+    
+    # ============================================================
+    # STEP 1: Parse monthly sales data with Date column for weekly breakdown
+    # ============================================================
+    col_date = 5  # Date column (was incorrectly set to 2, but Date is at column 5)
+    col_period = 1
+    col_sales_amount = 17
+    col_sales_returns = 20  # Sales Returns column
+    
+    data_rows = []
+    current_customer = None
+    current_customer_name = None
+    rows_processed = 0
+    rows_matched = 0
+    
+    def get_week_number(day):
+        """
+        Calculate week number based on day of month:
+        Week 1: days 1-7
+        Week 2: days 8-14
+        Week 3: days 15-23
+        Week 4: days 24-end of month
+        """
+        if day <= 7:
+            return 1
+        elif day <= 14:
+            return 2
+        elif day <= 23:
+            return 3
+        else:
+            return 4
+    
+    for idx in range(11, len(monthly_sales_df_raw)):
+        row = monthly_sales_df_raw.iloc[idx]
+        first_cell = row.iloc[0]
+        
+        if pd.isna(first_cell):
+            continue
+        
+        first_cell_str = str(first_cell).strip()
+        
+        # Detect customer code
+        if first_cell_str and not first_cell_str.isdigit() and not first_cell_str.startswith('Item'):
+            if any(c.isalpha() for c in first_cell_str) and any(c.isdigit() for c in first_cell_str):
+                current_customer = first_cell_str
+                cust_name = row.iloc[7] if pd.notna(row.iloc[7]) else ''
+                current_customer_name = str(cust_name).strip() if cust_name else current_customer
+                continue
+        
+        # Detect year row
+        if first_cell_str.isdigit() and len(first_cell_str) == 4:
+            year = int(first_cell_str)
+            rows_processed += 1
+            
+            # Only process target year and target month
+            if year != target_year:
+                continue
+            
+            period_cell = row.iloc[col_period]
+            month = None
+            if pd.notna(period_cell):
+                try:
+                    month = int(float(period_cell))
+                except (ValueError, TypeError):
+                    month = None
+            
+            # Only process target month
+            if month != target_month:
+                continue
+            
+            # Extract Date to determine week
+            date_cell = row.iloc[col_date]
+            day_of_month = None
+            week_number = None
+            
+            if pd.notna(date_cell):
+                try:
+                    # Try to parse as date
+                    if isinstance(date_cell, pd.Timestamp):
+                        day_of_month = date_cell.day
+                    elif hasattr(date_cell, 'day'):
+                        # datetime.datetime or similar
+                        day_of_month = date_cell.day
+                    elif isinstance(date_cell, (int, float)):
+                        # If it's a number (day of month directly or Excel serial date)
+                        num_val = int(date_cell)
+                        if 1 <= num_val <= 31:
+                            day_of_month = num_val
+                        elif num_val > 40000:
+                            # Excel serial date number - convert it
+                            date_obj = pd.to_datetime('1899-12-30') + pd.Timedelta(days=num_val)
+                            day_of_month = date_obj.day
+                    else:
+                        # Try to parse string date
+                        date_str = str(date_cell).strip()
+                        if date_str.isdigit():
+                            # If it's just a day number
+                            num_val = int(date_str)
+                            if 1 <= num_val <= 31:
+                                day_of_month = num_val
+                        else:
+                            # Try full date parsing
+                            date_obj = pd.to_datetime(date_cell, errors='coerce')
+                            if pd.notna(date_obj):
+                                day_of_month = date_obj.day
+                    
+                    if day_of_month and 1 <= day_of_month <= 31:
+                        week_number = get_week_number(day_of_month)
+                except (ValueError, TypeError, AttributeError):
+                    pass
+            
+            # If we couldn't determine week, default to week 1 (instead of skipping)
+            if week_number is None and pd.notna(date_cell):
+                week_number = 1  # Default to week 1 if date parsing fails
+            
+            sales_amount = row.iloc[col_sales_amount]
+            sales_returns = row.iloc[col_sales_returns] if len(row) > col_sales_returns else 0
+            
+            if pd.notna(sales_amount) and current_customer and week_number:
+                try:
+                    sales_value = float(sales_amount)
+                    returns_value = float(sales_returns) if pd.notna(sales_returns) else 0
+                    # Net Sales = Sales Amount - Sales Returns
+                    net_sales = sales_value - returns_value
+                    data_rows.append({
+                        'Customer #': current_customer,
+                        'Customer Name': current_customer_name,
+                        'Sales Amount': net_sales,
+                        'Week': week_number
+                    })
+                except (ValueError, TypeError):
+                    pass
+    
+    df_sales = pd.DataFrame(data_rows)
+    
+    if df_sales.empty:
+        st.warning(f"⚠️ No sales data found for {calendar.month_name[target_month]} {target_year}")
+        return None
+    
+    # Aggregate week distribution
+    
+    # ============================================================
+    # STEP 2: Join with customer list to get Sales Rep
+    # ============================================================
+    sales_rep_col = None
+    for col in customer_df.columns:
+        if 'sales' in col.lower() and 'rep' in col.lower():
+            sales_rep_col = col
+            break
+    
+    if not sales_rep_col:
+        st.warning("⚠️ Could not find 'Sales Rep' column in customer list")
+        return None
+    
+    # Create lookup for customer -> sales rep
+    customer_lookup = customer_df[['Customer #', sales_rep_col]].drop_duplicates(subset=['Customer #'])
+    
+    # Merge to add sales rep to sales data
+    df_sales = df_sales.merge(customer_lookup, on='Customer #', how='left')
+    
+    # Fill missing sales reps with 'Unassigned'
+    df_sales[sales_rep_col] = df_sales[sales_rep_col].fillna('Unassigned')
+    
+    # ============================================================
+    # STEP 3: Aggregate actual sales by Sales Rep and Week
+    # ============================================================
+    # Aggregate by sales rep and week
+    weekly_sales = df_sales.groupby([sales_rep_col, 'Week']).agg({
+        'Sales Amount': 'sum',
+        'Customer #': 'nunique'
+    }).reset_index()
+    
+    # Pivot to get weeks as columns
+    weekly_pivot = weekly_sales.pivot(index=sales_rep_col, columns='Week', values='Sales Amount').reset_index()
+    weekly_pivot.columns.name = None
+    
+    # Rename week columns
+    week_cols = {}
+    for col in weekly_pivot.columns:
+        if isinstance(col, int):
+            week_cols[col] = f'Week_{col}_Sales'
+    weekly_pivot = weekly_pivot.rename(columns=week_cols)
+    
+    # Calculate total actual sales per rep (sum of all weeks)
+    week_col_names = [f'Week_{i}_Sales' for i in range(1, 5)]
+    for col in week_col_names:
+        if col not in weekly_pivot.columns:
+            weekly_pivot[col] = 0
+    
+    weekly_pivot['Actual_Sales'] = weekly_pivot[[col for col in week_col_names if col in weekly_pivot.columns]].sum(axis=1)
+    
+    # Get customer count per rep (total across all weeks)
+    customer_counts = df_sales.groupby(sales_rep_col)['Customer #'].nunique().reset_index()
+    customer_counts = customer_counts.rename(columns={'Customer #': 'Customer_Count'})
+    
+    actual_sales = weekly_pivot.merge(customer_counts, on=sales_rep_col, how='left')
+    
+    # ============================================================
+    # STEP 4: Parse budget data for target month
+    # ============================================================
+    # Budget file structure (based on actual file):
+    # Row 0: Title row ("Budget Gross Sales Target by Rep" in column G)
+    # Row 1: Month headers in columns C onwards (Jan-25, Feb-25, ..., Dec-25, Total Budget 2025)
+    # Row 2: Rep "T" with 45% and budget values
+    # Row 3: Rep "A" with 17% and budget values
+    # Row 4: Rep "C" with 13% and budget values
+    # Row 5: Rep "O" with 12% and budget values
+    # Row 6: Rep "L" with 13% and budget values
+    # Row 7: "Budget Sales" total row
+    
+    budget_df_raw = sales_budget_df
+    
+    # Find the column index for target month
+    month_names_map = {
+        1: 'jan', 2: 'feb', 3: 'mar', 4: 'apr', 5: 'may', 6: 'jun',
+        7: 'jul', 8: 'aug', 9: 'sep', 10: 'oct', 11: 'nov', 12: 'dec'
+    }
+    target_month_str = month_names_map[target_month]
+    year_suffix = str(target_year)[-2:]  # Get last 2 digits of year (e.g., "25" from 2025)
+    
+    budget_col_idx = None
+    header_row_idx = None
+    
+    if not budget_df_raw.empty:
+        # Search for the month header row (contains month dates or month names)
+        # Check rows 0-5 for the header row
+        for row_idx in range(min(6, len(budget_df_raw))):
+            row = budget_df_raw.iloc[row_idx]
+            for col_idx, val in enumerate(row):
+                if pd.notna(val):
+                    # Check if it's a datetime object
+                    if hasattr(val, 'year') and hasattr(val, 'month'):
+                        if val.year == target_year and val.month == target_month:
+                            budget_col_idx = col_idx
+                            header_row_idx = row_idx
+                            break
+                    else:
+                        # Check string format like "Nov-25" or "2025-11-01"
+                        val_str = str(val).lower().strip()
+                        if target_month_str in val_str and year_suffix in val_str:
+                            budget_col_idx = col_idx
+                            header_row_idx = row_idx
+                            break
+                        # Also try parsing as date string
+                        try:
+                            date_val = pd.to_datetime(val, errors='coerce')
+                            if pd.notna(date_val) and date_val.year == target_year and date_val.month == target_month:
+                                budget_col_idx = col_idx
+                                header_row_idx = row_idx
+                                break
+                        except:
+                            pass
+            if budget_col_idx is not None:
+                break
+    
+    if budget_col_idx is None:
+        st.warning(f"⚠️ Could not find column for {calendar.month_name[target_month]} {target_year} in Sales Budget file")
+        return None
+    
+    # Parse sales rep budget data
+    # Rep codes (T, A, C, O, L) are in column A, starting from row after header row
+    
+    budget_rows = []
+    
+    # Start from the row after the header row
+    start_row = header_row_idx + 1 if header_row_idx is not None else 2
+    
+    for row_idx in range(start_row, min(start_row + 10, len(budget_df_raw))):
+        row = budget_df_raw.iloc[row_idx]
+        rep_code = row.iloc[0]  # Column A has rep codes
+        
+        if pd.notna(rep_code):
+            rep_code_str = str(rep_code).strip()
+            
+            # Check if this is a valid rep code (single letter)
+            # Skip "Budget Sales" row and other non-rep rows
+            if len(rep_code_str) == 1 and rep_code_str.isalpha():
+                # Get budget value from the matched month column
+                budget_value = row.iloc[budget_col_idx] if budget_col_idx < len(row) else None
+                if pd.notna(budget_value):
+                    try:
+                        budget_amount = float(budget_value)
+                        if budget_amount > 0:
+                            budget_rows.append({
+                                'Rep_Code': rep_code_str.upper(),
+                                'Monthly_Budget': budget_amount
+                            })
+                    except (ValueError, TypeError):
+                        pass
+    
+    if not budget_rows:
+        st.warning(f"⚠️ No valid budget data found for {calendar.month_name[target_month]} {target_year}")
+        return None
+    
+    budget_data = pd.DataFrame(budget_rows)
+    
+    # Map sales rep names to budget rep codes
+    # The budget file has rep codes (T, A, C, O, L) - we need to map actual sales rep names to these codes
+    unique_reps = df_sales[sales_rep_col].unique()
+    budget_rep_codes = budget_data['Rep_Code'].unique()
+    
+    # Create a mapping from actual sales rep names to budget rep codes
+    # Match by first letter of sales rep name to budget code
+    rep_to_code_mapping = {}
+    for rep in unique_reps:
+        if pd.isna(rep) or str(rep) == 'Unassigned':
+            continue
+        rep_str = str(rep).strip().upper()
+        for budget_code in budget_rep_codes:
+            code_str = str(budget_code).strip().upper()
+            # Match if the sales rep name starts with the budget code
+            if rep_str.startswith(code_str):
+                rep_to_code_mapping[rep] = budget_code
+                break
+    
+    # Apply mapping to sales data - convert sales rep names to budget codes
+    df_sales['Budget_Rep_Code'] = df_sales[sales_rep_col].map(rep_to_code_mapping)
+    df_sales['Budget_Rep_Code'] = df_sales['Budget_Rep_Code'].fillna('Other')
+    
+    # Re-aggregate sales by Budget Rep Code and Week
+    weekly_sales_by_code = df_sales.groupby(['Budget_Rep_Code', 'Week']).agg({
+        'Sales Amount': 'sum',
+        'Customer #': 'nunique'
+    }).reset_index()
+    
+    # Pivot to get weeks as columns
+    weekly_pivot = weekly_sales_by_code.pivot(index='Budget_Rep_Code', columns='Week', values='Sales Amount').reset_index()
+    weekly_pivot.columns.name = None
+    
+    # Rename week columns
+    week_cols = {}
+    for col in weekly_pivot.columns:
+        if isinstance(col, int):
+            week_cols[col] = f'Week_{col}_Sales'
+    weekly_pivot = weekly_pivot.rename(columns=week_cols)
+    
+    # Ensure all week columns exist
+    for col in week_col_names:
+        if col not in weekly_pivot.columns:
+            weekly_pivot[col] = 0
+    
+    # Calculate total actual sales
+    weekly_pivot['Actual_Sales'] = weekly_pivot[[col for col in week_col_names if col in weekly_pivot.columns]].sum(axis=1)
+    
+    # Get customer count per rep code
+    customer_counts = df_sales.groupby('Budget_Rep_Code')['Customer #'].nunique().reset_index()
+    customer_counts = customer_counts.rename(columns={'Customer #': 'Customer_Count'})
+    
+    actual_sales = weekly_pivot.merge(customer_counts, on='Budget_Rep_Code', how='left')
+    
+    # Rename Budget_Rep_Code to match budget_data
+    actual_sales = actual_sales.rename(columns={'Budget_Rep_Code': 'Rep_Code'})
+    
+    # ============================================================
+    # STEP 5: Merge actual sales with budget (using Rep_Code as key)
+    # ============================================================
+    # Use only reps from budget file (left join on budget_data)
+    weekly_metrics = budget_data.merge(actual_sales, on='Rep_Code', how='left')
+    
+    # Ensure all week columns exist and fill NaN values
+    for week_col in week_col_names:
+        if week_col not in weekly_metrics.columns:
+            weekly_metrics[week_col] = 0.0
+        else:
+            weekly_metrics[week_col] = weekly_metrics[week_col].fillna(0)
+    
+    # Fill NaN values
+    weekly_metrics['Actual_Sales'] = weekly_metrics['Actual_Sales'].fillna(0)
+    weekly_metrics['Monthly_Budget'] = weekly_metrics['Monthly_Budget'].fillna(0)
+    weekly_metrics['Customer_Count'] = weekly_metrics['Customer_Count'].fillna(0).astype(int)
+    
+    # Calculate weekly budget completion percentages
+    # Each week is compared against the monthly budget
+    for week_col in week_col_names:
+        if week_col in weekly_metrics.columns:
+            completion_col = week_col.replace('_Sales', '_Budget_%')
+            weekly_metrics[completion_col] = weekly_metrics.apply(
+                lambda x: (x[week_col] / x['Monthly_Budget'] * 100) if x['Monthly_Budget'] > 0 else 0,
+                axis=1
+            )
+    
+    # Calculate total % of Budget Completed (total actual sales vs monthly budget)
+    weekly_metrics['Budget_Completion_%'] = weekly_metrics.apply(
+        lambda x: (x['Actual_Sales'] / x['Monthly_Budget'] * 100) if x['Monthly_Budget'] > 0 else 0,
+        axis=1
+    )
+    
+    # Calculate variance (Actual - Budget)
+    weekly_metrics['Variance'] = weekly_metrics['Actual_Sales'] - weekly_metrics['Monthly_Budget']
+    
+    # Sort by actual sales descending
+    weekly_metrics = weekly_metrics.sort_values('Actual_Sales', ascending=False)
+    
+    # ============================================================
+    # STEP 6: Calculate totals (including weekly totals)
+    # ============================================================
+    total_summary = {
+        'Sales Rep': 'TOTAL',
+        'Customer_Count': int(weekly_metrics['Customer_Count'].sum()),
+        'Actual_Sales': weekly_metrics['Actual_Sales'].sum(),
+        'Monthly_Budget': weekly_metrics['Monthly_Budget'].sum(),
+        'Variance': weekly_metrics['Variance'].sum()
+    }
+    
+    # Add weekly totals ($ and %)
+    for week_col in week_col_names:
+        if week_col in weekly_metrics.columns:
+            total_summary[week_col] = weekly_metrics[week_col].sum()
+            
+            # Calculate weekly budget % for totals
+            week_pct_col = week_col.replace('_Sales', '_Budget_%')
+            total_summary[week_pct_col] = (
+                (total_summary[week_col] / total_summary['Monthly_Budget'] * 100)
+                if total_summary['Monthly_Budget'] > 0 else 0
+            )
+    
+    total_summary['Budget_Completion_%'] = (
+        (total_summary['Actual_Sales'] / total_summary['Monthly_Budget'] * 100) 
+        if total_summary['Monthly_Budget'] > 0 else 0
+    )
+    
+    return {
+        'sales_rep_weekly_metrics': weekly_metrics,
+        'total_summary': total_summary,
+        'sales_rep_col': 'Rep_Code',  # Use Rep_Code from budget file
+        'week_columns': week_col_names
+    }
+
+
 def create_sales_rep_excel_report(results, target_month, target_year, month_name):
     """
     Create Excel report for Sales Rep performance with charts.
@@ -3116,6 +3593,282 @@ def create_sales_rep_excel_report(results, target_month, target_year, month_name
         axes[1, 1].set_xlabel('% Achieved')
         for i, v in enumerate(chart_data['YTD_Achieved_%']):
             axes[1, 1].text(v + 2, i, f'{v:.1f}%', va='center', fontsize=9)
+        axes[1, 1].grid(axis='x', alpha=0.3)
+        
+        plt.tight_layout()
+        
+        # Save chart to buffer
+        img_buffer = io.BytesIO()
+        fig.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
+        img_buffer.seek(0)
+        plt.close(fig)
+        
+        img = XLImage(img_buffer)
+        ws.add_image(img, f'A{chart_start_row}')
+    
+    # Save workbook to bytes
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    return output
+
+
+def create_weekly_performance_excel_report(results, target_month, target_year, month_name):
+    """
+    Create Excel report for Weekly Sales Rep Performance.
+    """
+    if results is None:
+        return None
+    
+    weekly_metrics = results['sales_rep_weekly_metrics']
+    total_summary = results['total_summary']
+    sales_rep_col = results['sales_rep_col']
+    week_columns = results['week_columns']
+    
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"{month_name} Weekly Performance"
+    
+    # Styling
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF", size=10)
+    border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    
+    # Color fills
+    week_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+    budget_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+    total_fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
+    variance_pos_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    variance_neg_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+    
+    # Title
+    # Calculate total columns: Rep, Customers, Budget + (Week $ + Week %) * num_weeks + Total Sales, Total %
+    merge_cols = 3 + (len(week_columns) * 2) + 2
+    ws.merge_cells(f'A1:{chr(64 + merge_cols)}1')
+    ws['A1'] = f"Weekly Sales Rep Performance - {month_name} {target_year}"
+    ws['A1'].font = Font(bold=True, size=16)
+    ws['A1'].alignment = Alignment(horizontal='center')
+    
+    # Headers - include both $ and % for each week
+    headers = ['Sales Rep', 'Customers', 'Monthly Budget']
+    for week_col in week_columns:
+        week_num = week_col.replace('Week_', '').replace('_Sales', '')
+        headers.append(f'Week {week_num} $')
+        headers.append(f'Week {week_num} %')
+    headers.extend(['Total Sales', 'Total %'])  # Removed Variance
+    
+    for col_idx, header in enumerate(headers, start=1):
+        cell = ws.cell(row=3, column=col_idx, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        cell.border = border
+    
+    # Write Sales Rep Data
+    row_idx = 4
+    for _, rep_row in weekly_metrics.iterrows():
+        # Include all reps from budget file (no filtering)
+        col_idx = 1
+        
+        # Sales Rep
+        ws.cell(row=row_idx, column=col_idx, value=rep_row[sales_rep_col]).border = border
+        col_idx += 1
+        
+        # Customers
+        ws.cell(row=row_idx, column=col_idx, value=int(rep_row['Customer_Count'])).border = border
+        col_idx += 1
+        
+        # Monthly Budget
+        cell = ws.cell(row=row_idx, column=col_idx, value=rep_row['Monthly_Budget'])
+        cell.number_format = '$#,##0.00'
+        cell.fill = budget_fill
+        cell.border = border
+        col_idx += 1
+        
+        # Weekly Sales ($ and %)
+        for week_col in week_columns:
+            # Week $ amount
+            cell = ws.cell(row=row_idx, column=col_idx, value=rep_row[week_col])
+            cell.number_format = '$#,##0.00'
+            cell.fill = week_fill
+            cell.border = border
+            col_idx += 1
+            
+            # Week % of budget
+            week_pct_col = week_col.replace('_Sales', '_Budget_%')
+            if week_pct_col in rep_row.index:
+                cell = ws.cell(row=row_idx, column=col_idx, value=rep_row[week_pct_col] / 100)
+                cell.number_format = '0.0%'
+                cell.fill = variance_pos_fill if rep_row[week_pct_col] >= 100 else variance_neg_fill
+                cell.border = border
+            col_idx += 1
+        
+        # Total Sales
+        cell = ws.cell(row=row_idx, column=col_idx, value=rep_row['Actual_Sales'])
+        cell.number_format = '$#,##0.00'
+        cell.border = border
+        cell.font = Font(bold=True)
+        col_idx += 1
+        
+        # Total Budget Completion %
+        cell = ws.cell(row=row_idx, column=col_idx, value=rep_row['Budget_Completion_%'] / 100)
+        cell.number_format = '0.0%'
+        cell.fill = variance_pos_fill if rep_row['Budget_Completion_%'] >= 100 else variance_neg_fill
+        cell.border = border
+        
+        row_idx += 1
+    
+    # Total Row
+    col_idx = 1
+    for col in range(1, len(headers) + 1):
+        ws.cell(row=row_idx, column=col).fill = total_fill
+        ws.cell(row=row_idx, column=col).border = border
+        ws.cell(row=row_idx, column=col).font = Font(bold=True)
+    
+    ws.cell(row=row_idx, column=col_idx, value='TOTAL')
+    col_idx += 1
+    
+    ws.cell(row=row_idx, column=col_idx, value=total_summary['Customer_Count'])
+    col_idx += 1
+    
+    cell = ws.cell(row=row_idx, column=col_idx, value=total_summary['Monthly_Budget'])
+    cell.number_format = '$#,##0.00'
+    col_idx += 1
+    
+    # Weekly totals ($ and %)
+    for week_col in week_columns:
+        # Week $ total
+        cell = ws.cell(row=row_idx, column=col_idx, value=total_summary[week_col])
+        cell.number_format = '$#,##0.00'
+        col_idx += 1
+        
+        # Week % of budget
+        week_pct_col = week_col.replace('_Sales', '_Budget_%')
+        if week_pct_col in total_summary:
+            cell = ws.cell(row=row_idx, column=col_idx, value=total_summary[week_pct_col] / 100)
+            cell.number_format = '0.0%'
+        col_idx += 1
+    
+    cell = ws.cell(row=row_idx, column=col_idx, value=total_summary['Actual_Sales'])
+    cell.number_format = '$#,##0.00'
+    col_idx += 1
+    
+    cell = ws.cell(row=row_idx, column=col_idx, value=total_summary['Budget_Completion_%'] / 100)
+    cell.number_format = '0.0%'
+    
+    # Adjust column widths
+    ws.column_dimensions['A'].width = 20  # Sales Rep
+    ws.column_dimensions['B'].width = 12  # Customers
+    ws.column_dimensions['C'].width = 16  # Monthly Budget
+    
+    # Week columns ($ and % for each week)
+    col_letter_idx = 68  # Start at 'D'
+    for i in range(len(week_columns)):
+        ws.column_dimensions[chr(col_letter_idx)].width = 14  # Week $ 
+        col_letter_idx += 1
+        ws.column_dimensions[chr(col_letter_idx)].width = 10  # Week %
+        col_letter_idx += 1
+    
+    # Remaining columns
+    ws.column_dimensions[chr(col_letter_idx)].width = 14  # Total Sales
+    col_letter_idx += 1
+    ws.column_dimensions[chr(col_letter_idx)].width = 10  # Total %
+    
+    ws.row_dimensions[3].height = 30
+    
+    # ============================================================
+    # Add Charts
+    # ============================================================
+    chart_start_row = row_idx + 3
+    
+    # Use all reps from budget file for charts
+    chart_data = weekly_metrics.copy()
+    chart_reps = chart_data[sales_rep_col].tolist()
+    
+    if len(chart_reps) > 0:
+        fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+        fig.suptitle(f'Weekly Sales Rep Performance - {month_name} {target_year}', fontsize=14, fontweight='bold')
+        
+        colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#6B5B95']
+        
+        # Chart 1: Weekly Sales Stacked Bar Chart
+        week_labels = [f'Week {w.replace("Week_", "").replace("_Sales", "")}' for w in week_columns]
+        x = np.arange(len(chart_reps))
+        
+        bottom = np.zeros(len(chart_reps))
+        for i, week_col in enumerate(week_columns):
+            if week_col in chart_data.columns:
+                week_data = chart_data[week_col].values
+                axes[0, 0].bar(x, week_data, bottom=bottom, label=week_labels[i], 
+                              color=colors[i % len(colors)], alpha=0.8)
+                bottom += week_data
+        
+        axes[0, 0].set_title('Weekly Sales by Sales Rep (Stacked Bar)', fontsize=11, fontweight='bold')
+        axes[0, 0].set_ylabel('Sales Amount ($)')
+        axes[0, 0].set_xticks(x)
+        axes[0, 0].set_xticklabels(chart_reps, rotation=45, ha='right', fontsize=10)
+        axes[0, 0].legend(fontsize=9, loc='upper right')
+        axes[0, 0].yaxis.set_major_formatter(plt.FuncFormatter(lambda v, p: f'${v/1000:.0f}K'))
+        axes[0, 0].grid(axis='y', alpha=0.3)
+        
+        # Chart 2: Pie Chart - Sales Distribution by Rep
+        total_sales = chart_data['Actual_Sales'].values
+        # Only include reps with sales > 0
+        pie_labels = [rep for rep, sales in zip(chart_reps, total_sales) if sales > 0]
+        pie_values = [sales for sales in total_sales if sales > 0]
+        
+        if pie_values:
+            wedges, texts, autotexts = axes[0, 1].pie(
+                pie_values, 
+                labels=pie_labels, 
+                autopct=lambda pct: f'{pct:.1f}%' if pct > 5 else '',
+                colors=colors[:len(pie_values)],
+                explode=[0.02] * len(pie_values),
+                shadow=True,
+                startangle=90
+            )
+            axes[0, 1].set_title('Sales Distribution by Rep (Pie Chart)', fontsize=11, fontweight='bold')
+            # Add legend with actual values
+            legend_labels = [f'{rep}: ${val:,.0f}' for rep, val in zip(pie_labels, pie_values)]
+            axes[0, 1].legend(wedges, legend_labels, loc='lower left', fontsize=8)
+        else:
+            axes[0, 1].text(0.5, 0.5, 'No Sales Data', ha='center', va='center', fontsize=12)
+            axes[0, 1].set_title('Sales Distribution by Rep', fontsize=11, fontweight='bold')
+        
+        # Chart 3: Budget vs Actual Bar Chart
+        x = np.arange(len(chart_reps))
+        width = 0.35
+        
+        axes[1, 0].bar(x - width/2, chart_data['Monthly_Budget'], width, 
+                       label='Monthly Budget', color='#FFA500', alpha=0.8)
+        axes[1, 0].bar(x + width/2, chart_data['Actual_Sales'], width, 
+                       label='Actual Sales', color='#2E86AB', alpha=0.8)
+        axes[1, 0].set_title('Budget vs Actual Sales (Bar Chart)', fontsize=11, fontweight='bold')
+        axes[1, 0].set_ylabel('Amount ($)')
+        axes[1, 0].set_xticks(x)
+        axes[1, 0].set_xticklabels(chart_reps, rotation=45, ha='right', fontsize=10)
+        axes[1, 0].legend(fontsize=9)
+        axes[1, 0].yaxis.set_major_formatter(plt.FuncFormatter(lambda v, p: f'${v/1000:.0f}K'))
+        axes[1, 0].grid(axis='y', alpha=0.3)
+        
+        # Chart 4: Budget Completion % Horizontal Bar Chart
+        completion_colors = ['#28a745' if v >= 25 else '#dc3545' for v in chart_data['Budget_Completion_%']]
+        bars = axes[1, 1].barh(chart_reps, chart_data['Budget_Completion_%'], color=completion_colors, alpha=0.8)
+        axes[1, 1].axvline(x=25, color='blue', linestyle='--', linewidth=1, label='25% Target (1 week)')
+        axes[1, 1].axvline(x=50, color='orange', linestyle='--', linewidth=1, label='50% Target (2 weeks)')
+        axes[1, 1].axvline(x=75, color='green', linestyle='--', linewidth=1, label='75% Target (3 weeks)')
+        axes[1, 1].set_title('Budget Completion % by Sales Rep', fontsize=11, fontweight='bold')
+        axes[1, 1].set_xlabel('% of Monthly Budget Achieved')
+        for i, (bar, v) in enumerate(zip(bars, chart_data['Budget_Completion_%'])):
+            axes[1, 1].text(v + 1, bar.get_y() + bar.get_height()/2, f'{v:.1f}%', 
+                           va='center', fontsize=9)
+        axes[1, 1].legend(fontsize=8, loc='lower right')
         axes[1, 1].grid(axis='x', alpha=0.3)
         
         plt.tight_layout()
@@ -3502,6 +4255,77 @@ if uploaded_file is not None:
                 sales_rep_results = None
                 st.error(f"❌ Error generating sales rep report: {str(e)}")
             
+            # Weekly Sales Rep Performance Preview (if monthly files are provided)
+            weekly_rep_results = None
+            weekly_rep_excel_output = None
+            
+            if monthly_sales_file is not None and sales_budget_file is not None:
+                st.markdown("### 📅 Weekly Sales Rep Performance")
+                
+                try:
+                    # Read monthly sales details and budget files
+                    monthly_sales_df_raw = pd.read_excel(monthly_sales_file, header=None)
+                    # Read budget file without headers - we'll parse the structure manually
+                    # Structure: Row 0 = title, Row 1 = month headers, Rows 2-6 = rep data
+                    sales_budget_df = pd.read_excel(sales_budget_file, header=None, dtype=object)
+                    customer_df_for_weekly = pd.read_excel(customer_list_file)
+                    
+                    weekly_rep_results = generate_sales_rep_weekly_performance(
+                        monthly_sales_df_raw,
+                        sales_budget_df,
+                        customer_df_for_weekly,
+                        weekly_target_month,
+                        target_year
+                    )
+                    
+                    if weekly_rep_results is not None:
+                        # Generate Excel report
+                        month_name_weekly = calendar.month_name[weekly_target_month]
+                        weekly_rep_excel_output = create_weekly_performance_excel_report(
+                            weekly_rep_results, weekly_target_month, target_year, month_name_weekly
+                        )
+                        
+                        # Display weekly rep summary
+                        rep_col = weekly_rep_results['sales_rep_col']
+                        weekly_metrics = weekly_rep_results['sales_rep_weekly_metrics']
+                        week_columns = weekly_rep_results['week_columns']
+                        
+                        weekly_preview = []
+                        for _, rep_row in weekly_metrics.iterrows():
+                            # Show all reps from budget file (no filtering)
+                            preview_row = {
+                                'Sales Rep': rep_row[rep_col],
+                                'Customers': int(rep_row['Customer_Count']),
+                                'Monthly Budget': f"${rep_row['Monthly_Budget']:,.2f}",
+                            }
+                            
+                            # Add weekly sales columns with completion %
+                            for week_col in week_columns:
+                                week_num = week_col.replace('Week_', '').replace('_Sales', '')
+                                week_pct_col = week_col.replace('_Sales', '_Budget_%')
+                                week_pct = rep_row[week_pct_col] if week_pct_col in rep_row.index else 0
+                                preview_row[f'Wk {week_num} $'] = f"${rep_row[week_col]:,.2f}"
+                                preview_row[f'Wk {week_num} %'] = f"{week_pct:.1f}%"
+                            
+                            preview_row['Total Sales'] = f"${rep_row['Actual_Sales']:,.2f}"
+                            preview_row['Total %'] = f"{rep_row['Budget_Completion_%']:.1f}%"
+                            
+                            weekly_preview.append(preview_row)
+                        
+                        if weekly_preview:
+                            weekly_df_display = pd.DataFrame(weekly_preview)
+                            st.dataframe(weekly_df_display, use_container_width=True, hide_index=True)
+                        
+                        num_reps = len(weekly_metrics)
+                        month_name_display = calendar.month_name[weekly_target_month]
+                        st.success(f"✅ Weekly performance report for {month_name_display} {target_year} includes {num_reps} sales representatives with weekly breakdown")
+                    else:
+                        st.error("❌ Could not process weekly sales rep data.")
+                except Exception as e:
+                    weekly_rep_results = None
+                    st.error(f"❌ Error generating weekly sales rep report: {str(e)}")
+                    st.exception(e)  # Show full traceback
+            
             # Generate PowerPoint presentation (after channel and sales rep data is available)
             ppt_output = create_powerpoint_presentation(
                 results_current, results_previous, target_month, target_year,
@@ -3613,12 +4437,15 @@ if uploaded_file is not None:
                     st.error("❌ Could not generate channel customer report")
             
             with tab5:
-                st.markdown("### � Sales Rep Performance Report")
-                st.markdown("MTD/YTD performance analysis by Sales Rep with charts")
+                st.markdown("### 👤 Sales Rep Performance Reports")
+                
+                # MTD/YTD Sales Rep Report
+                st.markdown("#### 📊 MTD/YTD Performance")
+                st.markdown("Performance analysis by Sales Rep with charts")
                 
                 if sales_rep_excel_output:
                     st.download_button(
-                        label="📥 Download Sales Rep Report",
+                        label="📥 Download Sales Rep MTD/YTD Report",
                         data=sales_rep_excel_output,
                         file_name=f"Sales_Rep_Performance_{month_name}_{target_year}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -3627,6 +4454,28 @@ if uploaded_file is not None:
                     st.caption("✓ Includes sales rep summary with MTD/YTD metrics and performance charts")
                 else:
                     st.error("❌ Could not generate sales rep report")
+                
+                st.markdown("---")
+                
+                # Weekly Sales Rep Report
+                st.markdown("#### 📅 Weekly Performance Report")
+                st.markdown("Weekly breakdown of sales rep performance vs monthly budget")
+                
+                if weekly_rep_excel_output:
+                    month_name_display = calendar.month_name[weekly_target_month]
+                    st.download_button(
+                        label=f"📥 Download Weekly Performance Report - {month_name_display} {target_year}",
+                        data=weekly_rep_excel_output,
+                        file_name=f"Weekly_Sales_Rep_Performance_{month_name_display}_{target_year}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                    st.caption(f"✓ Weekly sales breakdown for {month_name_display} {target_year} with budget comparison")
+                else:
+                    if monthly_sales_file is None or sales_budget_file is None:
+                        st.info("ℹ️ Upload Monthly Sales Details File and Sales Budget File to generate weekly performance report")
+                    else:
+                        st.error("❌ Could not generate weekly performance report")
             
             with tab6:
                 st.markdown("### 📽️ PowerPoint Presentation")
