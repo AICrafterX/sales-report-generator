@@ -263,45 +263,80 @@ def load_budget_data(budget_file, target_month):
         budget_row = None
         period_cols = {}  # Map period number to column index
         total_budget_col = None
+        header_row_idx = None
         
         # First, find the header row that contains period numbers or month names
         for row_idx in range(min(5, len(df))):
             row_values = df.iloc[row_idx].tolist()
             
-            # Check if this row contains period numbers (1, 2, 3, etc.)
+            # Check if this row contains period numbers (1, 2, 3, etc.) or "period X" text
             period_count = 0
+            temp_period_cols = {}
+            temp_total_col = None
+            
             for col_idx, val in enumerate(row_values):
-                try:
-                    val_int = int(float(val)) if pd.notna(val) else None
-                    if val_int is not None and 1 <= val_int <= 12:
-                        period_cols[val_int] = col_idx
-                        period_count += 1
-                except (ValueError, TypeError):
+                if pd.notna(val):
+                    val_str = str(val).lower().strip()
+                    
+                    # Check for "period X" format (e.g., "period 1", "period 2")
+                    if 'period' in val_str:
+                        # Extract the number after "period"
+                        import re
+                        match = re.search(r'period\s*(\d+)', val_str)
+                        if match:
+                            period_num = int(match.group(1))
+                            if 1 <= period_num <= 12:
+                                temp_period_cols[period_num] = col_idx
+                                period_count += 1
+                    
                     # Check for "FY" or "Budget" or "Total" keywords for total budget column
-                    val_str = str(val).lower() if pd.notna(val) else ''
-                    if 'fy' in val_str or 'total' in val_str or val_str == 'budget':
-                        total_budget_col = col_idx
+                    if 'fy' in val_str or 'total' in val_str or 'budget' in val_str:
+                        temp_total_col = col_idx
+                    
+                    # Also check for pure numbers (1, 2, 3, etc.)
+                    try:
+                        val_int = int(float(val))
+                        if 1 <= val_int <= 12:
+                            temp_period_cols[val_int] = col_idx
+                            period_count += 1
+                    except (ValueError, TypeError):
+                        pass
             
             if period_count >= 6:  # Found at least 6 months, likely the period row
+                period_cols = temp_period_cols
+                total_budget_col = temp_total_col
+                header_row_idx = row_idx
                 break
         
+        if not period_cols:
+            st.warning("⚠️ Could not detect month/period columns in budget file")
+            return budget_data
+        
         # Now find the row with actual budget values (numeric row after headers)
-        for row_idx in range(len(df)):
+        start_search = header_row_idx + 1 if header_row_idx is not None else 0
+        for row_idx in range(start_search, len(df)):
             row_values = df.iloc[row_idx].tolist()
             numeric_count = 0
-            for val in row_values:
-                try:
-                    if pd.notna(val) and isinstance(val, (int, float)) and val > 1000:
-                        numeric_count += 1
-                except (ValueError, TypeError):
-                    pass
+            total_value = 0
             
-            if numeric_count >= 6:  # Found row with many large numbers
+            for col_idx in period_cols.values():
+                if col_idx < len(row_values):
+                    val = row_values[col_idx]
+                    try:
+                        if pd.notna(val):
+                            num_val = float(val)
+                            if num_val > 10000:  # Budget values are typically large
+                                numeric_count += 1
+                                total_value += num_val
+                    except (ValueError, TypeError):
+                        pass
+            
+            if numeric_count >= 6 and total_value > 100000:  # Found row with many large numbers
                 budget_row = row_idx
                 break
         
-        if budget_row is None or not period_cols:
-            st.warning("⚠️ Could not detect budget structure in file")
+        if budget_row is None:
+            st.warning("⚠️ Could not detect budget values row in file")
             return budget_data
         
         # Calculate MTD budget (sum of months 1 to target_month)
@@ -339,8 +374,6 @@ def load_budget_data(budget_file, target_month):
         budget_data['mtd_budget'] = mtd_budget
         budget_data['ytd_budget'] = ytd_budget
         budget_data['loaded'] = True
-        
-        st.success(f"✅ Loaded budget data: MTD Budget = ${mtd_budget:,.2f}, YTD Budget = ${ytd_budget:,.2f}")
         
     except Exception as e:
         st.warning(f"⚠️ Error loading budget data: {str(e)}")
@@ -2950,10 +2983,15 @@ def generate_sales_rep_weekly_performance(monthly_sales_df_raw, sales_budget_df,
     # ============================================================
     # STEP 1: Parse monthly sales data with Date column for weekly breakdown
     # ============================================================
-    col_date = 5  # Date column (was incorrectly set to 2, but Date is at column 5)
-    col_period = 1
-    col_sales_amount = 17
-    col_sales_returns = 20  # Sales Returns column
+    # Column indices based on actual file structure (with merged cell gaps):
+    # Col0: Year, Col1: Period, Col2: Type, Col5: Date
+    # Col7: Transaction, Col9: Salesperson, Col11: Category, Col13: Location
+    # Col14: Quantity, Col17: Sales Amount, Col20: Sales Returns, Col22: Cost of Sales
+    col_date = 5  # Date column (e.g., '2025-11-11 00:00:00')
+    col_period = 1  # Period column
+    col_sales_amount = 17  # Sales Amount column (e.g., 48.6)
+    col_sales_returns = 20  # Sales Returns column (e.g., 0)
+    col_cost_of_sales = 22  # Cost of Sales column (e.g., 30.64)
     
     data_rows = []
     current_customer = None
@@ -2987,15 +3025,17 @@ def generate_sales_rep_weekly_performance(monthly_sales_df_raw, sales_budget_df,
         
         first_cell_str = str(first_cell).strip()
         
-        # Detect customer code
+        # Detect customer code (e.g., "ASIA008", "DAHU002", "FOOD006")
+        # Customer codes have letters and numbers, are not pure digits, and don't start with "Item"
         if first_cell_str and not first_cell_str.isdigit() and not first_cell_str.startswith('Item'):
             if any(c.isalpha() for c in first_cell_str) and any(c.isdigit() for c in first_cell_str):
                 current_customer = first_cell_str
-                cust_name = row.iloc[7] if pd.notna(row.iloc[7]) else ''
+                # Customer name is in column E (index 4) based on file structure
+                cust_name = row.iloc[4] if len(row) > 4 and pd.notna(row.iloc[4]) else ''
                 current_customer_name = str(cust_name).strip() if cust_name else current_customer
                 continue
         
-        # Detect year row
+        # Detect year row (data rows start with 4-digit year like "2025")
         if first_cell_str.isdigit() and len(first_cell_str) == 4:
             year = int(first_cell_str)
             rows_processed += 1
@@ -3015,6 +3055,8 @@ def generate_sales_rep_weekly_performance(monthly_sales_df_raw, sales_budget_df,
             # Only process target month
             if month != target_month:
                 continue
+            
+            rows_matched += 1
             
             # Extract Date to determine week
             date_cell = row.iloc[col_date]
@@ -3041,7 +3083,15 @@ def generate_sales_rep_weekly_performance(monthly_sales_df_raw, sales_budget_df,
                     else:
                         # Try to parse string date
                         date_str = str(date_cell).strip()
-                        if date_str.isdigit():
+                        if '/' in date_str:
+                            # Parse date like "11/11/2025" (DD/MM/YYYY)
+                            try:
+                                date_obj = pd.to_datetime(date_str, dayfirst=True, errors='coerce')
+                                if pd.notna(date_obj):
+                                    day_of_month = date_obj.day
+                            except:
+                                pass
+                        elif date_str.isdigit():
                             # If it's just a day number
                             num_val = int(date_str)
                             if 1 <= num_val <= 31:
@@ -3058,22 +3108,25 @@ def generate_sales_rep_weekly_performance(monthly_sales_df_raw, sales_budget_df,
                     pass
             
             # If we couldn't determine week, default to week 1 (instead of skipping)
-            if week_number is None and pd.notna(date_cell):
+            if week_number is None:
                 week_number = 1  # Default to week 1 if date parsing fails
             
             sales_amount = row.iloc[col_sales_amount]
             sales_returns = row.iloc[col_sales_returns] if len(row) > col_sales_returns else 0
+            cost_of_sales = row.iloc[col_cost_of_sales] if len(row) > col_cost_of_sales else 0
             
             if pd.notna(sales_amount) and current_customer and week_number:
                 try:
                     sales_value = float(sales_amount)
                     returns_value = float(sales_returns) if pd.notna(sales_returns) else 0
+                    cost_value = float(cost_of_sales) if pd.notna(cost_of_sales) else 0
                     # Net Sales = Sales Amount - Sales Returns
                     net_sales = sales_value - returns_value
                     data_rows.append({
                         'Customer #': current_customer,
                         'Customer Name': current_customer_name,
                         'Sales Amount': net_sales,
+                        'Cost_of_Sales': cost_value,
                         'Week': week_number
                     })
                 except (ValueError, TypeError):
@@ -3265,30 +3318,52 @@ def generate_sales_rep_weekly_performance(monthly_sales_df_raw, sales_budget_df,
     df_sales['Budget_Rep_Code'] = df_sales[sales_rep_col].map(rep_to_code_mapping)
     df_sales['Budget_Rep_Code'] = df_sales['Budget_Rep_Code'].fillna('Other')
     
-    # Re-aggregate sales by Budget Rep Code and Week
+    # Re-aggregate sales by Budget Rep Code and Week (include Cost of Sales)
     weekly_sales_by_code = df_sales.groupby(['Budget_Rep_Code', 'Week']).agg({
         'Sales Amount': 'sum',
+        'Cost_of_Sales': 'sum',
         'Customer #': 'nunique'
     }).reset_index()
     
-    # Pivot to get weeks as columns
+    # Pivot to get weeks as columns for Sales
     weekly_pivot = weekly_sales_by_code.pivot(index='Budget_Rep_Code', columns='Week', values='Sales Amount').reset_index()
     weekly_pivot.columns.name = None
     
-    # Rename week columns
+    # Pivot to get weeks as columns for Cost of Sales
+    weekly_cost_pivot = weekly_sales_by_code.pivot(index='Budget_Rep_Code', columns='Week', values='Cost_of_Sales').reset_index()
+    weekly_cost_pivot.columns.name = None
+    
+    # Rename week columns for sales
     week_cols = {}
     for col in weekly_pivot.columns:
         if isinstance(col, int):
             week_cols[col] = f'Week_{col}_Sales'
     weekly_pivot = weekly_pivot.rename(columns=week_cols)
     
+    # Rename week columns for cost
+    week_cost_cols = {}
+    for col in weekly_cost_pivot.columns:
+        if isinstance(col, int):
+            week_cost_cols[col] = f'Week_{col}_Cost'
+    weekly_cost_pivot = weekly_cost_pivot.rename(columns=week_cost_cols)
+    
+    # Merge cost data into weekly_pivot
+    weekly_pivot = weekly_pivot.merge(weekly_cost_pivot, on='Budget_Rep_Code', how='left')
+    
     # Ensure all week columns exist
     for col in week_col_names:
         if col not in weekly_pivot.columns:
             weekly_pivot[col] = 0
     
-    # Calculate total actual sales
+    # Ensure all week cost columns exist
+    week_cost_col_names = [f'Week_{i}_Cost' for i in range(1, 5)]
+    for col in week_cost_col_names:
+        if col not in weekly_pivot.columns:
+            weekly_pivot[col] = 0
+    
+    # Calculate total actual sales and total cost
     weekly_pivot['Actual_Sales'] = weekly_pivot[[col for col in week_col_names if col in weekly_pivot.columns]].sum(axis=1)
+    weekly_pivot['Total_Cost'] = weekly_pivot[[col for col in week_cost_col_names if col in weekly_pivot.columns]].sum(axis=1)
     
     # Get customer count per rep code
     customer_counts = df_sales.groupby('Budget_Rep_Code')['Customer #'].nunique().reset_index()
@@ -3312,24 +3387,49 @@ def generate_sales_rep_weekly_performance(monthly_sales_df_raw, sales_budget_df,
         else:
             weekly_metrics[week_col] = weekly_metrics[week_col].fillna(0)
     
+    # Ensure all week cost columns exist and fill NaN values
+    for week_cost_col in week_cost_col_names:
+        if week_cost_col not in weekly_metrics.columns:
+            weekly_metrics[week_cost_col] = 0.0
+        else:
+            weekly_metrics[week_cost_col] = weekly_metrics[week_cost_col].fillna(0)
+    
     # Fill NaN values
     weekly_metrics['Actual_Sales'] = weekly_metrics['Actual_Sales'].fillna(0)
+    weekly_metrics['Total_Cost'] = weekly_metrics['Total_Cost'].fillna(0)
     weekly_metrics['Monthly_Budget'] = weekly_metrics['Monthly_Budget'].fillna(0)
     weekly_metrics['Customer_Count'] = weekly_metrics['Customer_Count'].fillna(0).astype(int)
     
-    # Calculate weekly budget completion percentages
+    # Calculate weekly budget completion percentages and GP%
     # Each week is compared against the monthly budget
-    for week_col in week_col_names:
-        if week_col in weekly_metrics.columns:
-            completion_col = week_col.replace('_Sales', '_Budget_%')
+    for i in range(1, 5):
+        week_sales_col = f'Week_{i}_Sales'
+        week_cost_col = f'Week_{i}_Cost'
+        week_gp_col = f'Week_{i}_GP%'
+        
+        if week_sales_col in weekly_metrics.columns:
+            # Budget completion %
+            completion_col = week_sales_col.replace('_Sales', '_Budget_%')
             weekly_metrics[completion_col] = weekly_metrics.apply(
-                lambda x: (x[week_col] / x['Monthly_Budget'] * 100) if x['Monthly_Budget'] > 0 else 0,
+                lambda x: (x[week_sales_col] / x['Monthly_Budget'] * 100) if x['Monthly_Budget'] > 0 else 0,
+                axis=1
+            )
+            
+            # GP% = (Sales - Cost) / Sales * 100
+            weekly_metrics[week_gp_col] = weekly_metrics.apply(
+                lambda x: ((x[week_sales_col] - x[week_cost_col]) / x[week_sales_col] * 100) if x[week_sales_col] > 0 else 0,
                 axis=1
             )
     
     # Calculate total % of Budget Completed (total actual sales vs monthly budget)
     weekly_metrics['Budget_Completion_%'] = weekly_metrics.apply(
         lambda x: (x['Actual_Sales'] / x['Monthly_Budget'] * 100) if x['Monthly_Budget'] > 0 else 0,
+        axis=1
+    )
+    
+    # Calculate total GP% = (Total Sales - Total Cost) / Total Sales * 100
+    weekly_metrics['Total_GP%'] = weekly_metrics.apply(
+        lambda x: ((x['Actual_Sales'] - x['Total_Cost']) / x['Actual_Sales'] * 100) if x['Actual_Sales'] > 0 else 0,
         axis=1
     )
     
@@ -3346,14 +3446,21 @@ def generate_sales_rep_weekly_performance(monthly_sales_df_raw, sales_budget_df,
         'Sales Rep': 'TOTAL',
         'Customer_Count': int(weekly_metrics['Customer_Count'].sum()),
         'Actual_Sales': weekly_metrics['Actual_Sales'].sum(),
+        'Total_Cost': weekly_metrics['Total_Cost'].sum(),
         'Monthly_Budget': weekly_metrics['Monthly_Budget'].sum(),
         'Variance': weekly_metrics['Variance'].sum()
     }
     
-    # Add weekly totals ($ and %)
-    for week_col in week_col_names:
+    # Add weekly totals ($ and % and GP%)
+    week_cost_col_names = [f'Week_{i}_Cost' for i in range(1, 5)]
+    for i in range(1, 5):
+        week_col = f'Week_{i}_Sales'
+        week_cost_col = f'Week_{i}_Cost'
+        week_gp_col = f'Week_{i}_GP%'
+        
         if week_col in weekly_metrics.columns:
             total_summary[week_col] = weekly_metrics[week_col].sum()
+            total_summary[week_cost_col] = weekly_metrics[week_cost_col].sum() if week_cost_col in weekly_metrics.columns else 0
             
             # Calculate weekly budget % for totals
             week_pct_col = week_col.replace('_Sales', '_Budget_%')
@@ -3361,10 +3468,22 @@ def generate_sales_rep_weekly_performance(monthly_sales_df_raw, sales_budget_df,
                 (total_summary[week_col] / total_summary['Monthly_Budget'] * 100)
                 if total_summary['Monthly_Budget'] > 0 else 0
             )
+            
+            # Calculate weekly GP% for totals
+            total_summary[week_gp_col] = (
+                ((total_summary[week_col] - total_summary[week_cost_col]) / total_summary[week_col] * 100)
+                if total_summary[week_col] > 0 else 0
+            )
     
     total_summary['Budget_Completion_%'] = (
         (total_summary['Actual_Sales'] / total_summary['Monthly_Budget'] * 100) 
         if total_summary['Monthly_Budget'] > 0 else 0
+    )
+    
+    # Calculate total GP% for totals
+    total_summary['Total_GP%'] = (
+        ((total_summary['Actual_Sales'] - total_summary['Total_Cost']) / total_summary['Actual_Sales'] * 100)
+        if total_summary['Actual_Sales'] > 0 else 0
     )
     
     return {
@@ -3646,22 +3765,24 @@ def create_weekly_performance_excel_report(results, target_month, target_year, m
     total_fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
     variance_pos_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
     variance_neg_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+    gp_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")  # GP% fill
     
     # Title
-    # Calculate total columns: Rep, Customers, Budget + (Week $ + Week %) * num_weeks + Total Sales, Total %
-    merge_cols = 3 + (len(week_columns) * 2) + 2
-    ws.merge_cells(f'A1:{chr(64 + merge_cols)}1')
+    # Calculate total columns: Rep, Customers, Budget + (Week $ + Week % + Week GP%) * num_weeks + Total Sales, Total %, Total GP%
+    merge_cols = 3 + (len(week_columns) * 3) + 3
+    ws.merge_cells(f'A1:{chr(64 + min(merge_cols, 26))}1')
     ws['A1'] = f"Weekly Sales Rep Performance - {month_name} {target_year}"
     ws['A1'].font = Font(bold=True, size=16)
     ws['A1'].alignment = Alignment(horizontal='center')
     
-    # Headers - include both $ and % for each week
+    # Headers - include $, %, and GP% for each week
     headers = ['Sales Rep', 'Customers', 'Monthly Budget']
     for week_col in week_columns:
         week_num = week_col.replace('Week_', '').replace('_Sales', '')
         headers.append(f'Week {week_num} $')
         headers.append(f'Week {week_num} %')
-    headers.extend(['Total Sales', 'Total %'])  # Removed Variance
+        headers.append(f'Week {week_num} GP%')
+    headers.extend(['Total Sales', 'Total %', 'Total GP%'])
     
     for col_idx, header in enumerate(headers, start=1):
         cell = ws.cell(row=3, column=col_idx, value=header)
@@ -3691,8 +3812,10 @@ def create_weekly_performance_excel_report(results, target_month, target_year, m
         cell.border = border
         col_idx += 1
         
-        # Weekly Sales ($ and %)
+        # Weekly Sales ($, %, and GP%)
         for week_col in week_columns:
+            week_num = week_col.replace('Week_', '').replace('_Sales', '')
+            
             # Week $ amount
             cell = ws.cell(row=row_idx, column=col_idx, value=rep_row[week_col])
             cell.number_format = '$#,##0.00'
@@ -3708,6 +3831,15 @@ def create_weekly_performance_excel_report(results, target_month, target_year, m
                 cell.fill = variance_pos_fill if rep_row[week_pct_col] >= 100 else variance_neg_fill
                 cell.border = border
             col_idx += 1
+            
+            # Week GP%
+            week_gp_col = f'Week_{week_num}_GP%'
+            if week_gp_col in rep_row.index:
+                cell = ws.cell(row=row_idx, column=col_idx, value=rep_row[week_gp_col] / 100)
+                cell.number_format = '0.0%'
+                cell.fill = gp_fill
+                cell.border = border
+            col_idx += 1
         
         # Total Sales
         cell = ws.cell(row=row_idx, column=col_idx, value=rep_row['Actual_Sales'])
@@ -3720,6 +3852,14 @@ def create_weekly_performance_excel_report(results, target_month, target_year, m
         cell = ws.cell(row=row_idx, column=col_idx, value=rep_row['Budget_Completion_%'] / 100)
         cell.number_format = '0.0%'
         cell.fill = variance_pos_fill if rep_row['Budget_Completion_%'] >= 100 else variance_neg_fill
+        cell.border = border
+        col_idx += 1
+        
+        # Total GP%
+        total_gp = rep_row['Total_GP%'] if 'Total_GP%' in rep_row.index else 0
+        cell = ws.cell(row=row_idx, column=col_idx, value=total_gp / 100)
+        cell.number_format = '0.0%'
+        cell.fill = gp_fill
         cell.border = border
         
         row_idx += 1
@@ -3754,6 +3894,14 @@ def create_weekly_performance_excel_report(results, target_month, target_year, m
             cell = ws.cell(row=row_idx, column=col_idx, value=total_summary[week_pct_col] / 100)
             cell.number_format = '0.0%'
         col_idx += 1
+        
+        # Week GP%
+        week_num = week_col.replace('Week_', '').replace('_Sales', '')
+        week_gp_col = f'Week_{week_num}_GP%'
+        if week_gp_col in total_summary:
+            cell = ws.cell(row=row_idx, column=col_idx, value=total_summary[week_gp_col] / 100)
+            cell.number_format = '0.0%'
+        col_idx += 1
     
     cell = ws.cell(row=row_idx, column=col_idx, value=total_summary['Actual_Sales'])
     cell.number_format = '$#,##0.00'
@@ -3761,24 +3909,33 @@ def create_weekly_performance_excel_report(results, target_month, target_year, m
     
     cell = ws.cell(row=row_idx, column=col_idx, value=total_summary['Budget_Completion_%'] / 100)
     cell.number_format = '0.0%'
+    col_idx += 1
+    
+    # Total GP%
+    cell = ws.cell(row=row_idx, column=col_idx, value=total_summary.get('Total_GP%', 0) / 100)
+    cell.number_format = '0.0%'
     
     # Adjust column widths
     ws.column_dimensions['A'].width = 20  # Sales Rep
     ws.column_dimensions['B'].width = 12  # Customers
     ws.column_dimensions['C'].width = 16  # Monthly Budget
     
-    # Week columns ($ and % for each week)
+    # Week columns ($, %, and GP% for each week)
     col_letter_idx = 68  # Start at 'D'
     for i in range(len(week_columns)):
         ws.column_dimensions[chr(col_letter_idx)].width = 14  # Week $ 
         col_letter_idx += 1
         ws.column_dimensions[chr(col_letter_idx)].width = 10  # Week %
         col_letter_idx += 1
+        ws.column_dimensions[chr(col_letter_idx)].width = 10  # Week GP%
+        col_letter_idx += 1
     
     # Remaining columns
     ws.column_dimensions[chr(col_letter_idx)].width = 14  # Total Sales
     col_letter_idx += 1
     ws.column_dimensions[chr(col_letter_idx)].width = 10  # Total %
+    col_letter_idx += 1
+    ws.column_dimensions[chr(col_letter_idx)].width = 10  # Total GP%
     
     ws.row_dimensions[3].height = 30
     
@@ -4009,35 +4166,51 @@ if uploaded_file is not None:
                 mtd_gp_achieved = "0%" if results_previous['MTD GP%'] == 0 else f"{(results_current['MTD GP%'] / results_previous['MTD GP%'] * 100):.0f}%"
                 ytd_gp_achieved = "0%" if results_previous['YTD GP%'] == 0 else f"{(results_current['YTD GP%'] / results_previous['YTD GP%'] * 100):.0f}%"
                 
+                # Get budget values if loaded
+                mtd_budget_str = ""
+                ytd_budget_str = ""
+                mtd_vs_budget = ""
+                ytd_vs_budget = ""
+                
+                if budget_data is not None and budget_data.get('loaded', False):
+                    mtd_budget = budget_data.get('mtd_budget', 0)
+                    ytd_budget = budget_data.get('ytd_budget', 0)
+                    if mtd_budget > 0:
+                        mtd_budget_str = f"$ {mtd_budget:,.2f}"
+                        mtd_vs_budget = f"{(results_current['MTD Gross Sales'] / mtd_budget * 100):.0f}%"
+                    if ytd_budget > 0:
+                        ytd_budget_str = f"$ {ytd_budget:,.2f}"
+                        ytd_vs_budget = f"{(results_current['YTD Gross Sales'] / ytd_budget * 100):.0f}%"
+                
                 summary_data = {
                     'Period': [str(target_year), str(comparison_year), '% Achieved', f'{target_year} Budget', '% vs Budget'],
                     'MTD Gross Sales': [
                         f"$ {results_current['MTD Gross Sales']:,.2f}",
                         f"$ {results_previous['MTD Gross Sales']:,.2f}",
                         f"{mtd_achieved:.0f}%",
-                        "",
-                        "0%"
+                        mtd_budget_str,
+                        mtd_vs_budget
                     ],
                     'MTD GP%': [
                         f"{results_current['MTD GP%']:.2f}%",
                         f"{results_previous['MTD GP%']:.2f}%",
                         mtd_gp_achieved,
                         "",
-                        "0%"
+                        ""
                     ],
                     'YTD Gross Sales': [
                         f"$ {results_current['YTD Gross Sales']:,.2f}",
                         f"$ {results_previous['YTD Gross Sales']:,.2f}",
                         f"{ytd_achieved:.0f}%",
-                        "",
-                        "0%"
+                        ytd_budget_str,
+                        ytd_vs_budget
                     ],
                     'YTD GP%': [
                         f"{results_current['YTD GP%']:.2f}%",
                         f"{results_previous['YTD GP%']:.2f}%",
                         ytd_gp_achieved,
                         "",
-                        "0%"
+                        ""
                     ]
                 }
                 
@@ -4299,16 +4472,21 @@ if uploaded_file is not None:
                                 'Monthly Budget': f"${rep_row['Monthly_Budget']:,.2f}",
                             }
                             
-                            # Add weekly sales columns with completion %
+                            # Add weekly sales columns with completion % and GP%
                             for week_col in week_columns:
                                 week_num = week_col.replace('Week_', '').replace('_Sales', '')
                                 week_pct_col = week_col.replace('_Sales', '_Budget_%')
+                                week_gp_col = f'Week_{week_num}_GP%'
                                 week_pct = rep_row[week_pct_col] if week_pct_col in rep_row.index else 0
+                                week_gp = rep_row[week_gp_col] if week_gp_col in rep_row.index else 0
                                 preview_row[f'Wk {week_num} $'] = f"${rep_row[week_col]:,.2f}"
                                 preview_row[f'Wk {week_num} %'] = f"{week_pct:.1f}%"
+                                preview_row[f'Wk {week_num} GP%'] = f"{week_gp:.1f}%"
                             
                             preview_row['Total Sales'] = f"${rep_row['Actual_Sales']:,.2f}"
                             preview_row['Total %'] = f"{rep_row['Budget_Completion_%']:.1f}%"
+                            total_gp = rep_row['Total_GP%'] if 'Total_GP%' in rep_row.index else 0
+                            preview_row['Total GP%'] = f"{total_gp:.1f}%"
                             
                             weekly_preview.append(preview_row)
                         
@@ -4318,7 +4496,7 @@ if uploaded_file is not None:
                         
                         num_reps = len(weekly_metrics)
                         month_name_display = calendar.month_name[weekly_target_month]
-                        st.success(f"✅ Weekly performance report for {month_name_display} {target_year} includes {num_reps} sales representatives with weekly breakdown")
+                        st.success(f"✅ Weekly performance report for {month_name_display} {target_year} includes {num_reps} sales representatives with weekly breakdown and GP%")
                     else:
                         st.error("❌ Could not process weekly sales rep data.")
                 except Exception as e:
