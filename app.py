@@ -88,25 +88,7 @@ with st.sidebar:
         help="Select the month to analyze weekly sales rep performance"
     )
     
-    st.markdown("---")
-    st.markdown("### 📖 Instructions")
-    st.markdown("""
-    1. Upload your Sales Summary Excel file
-    2. Upload your Item Master Excel file (required)
-    3. Upload Sales Details & Customer List
-    4. Review key performance metrics
-    5. Download detailed reports
-    6. Analyze brand, SKU, and customer performance
-    """)
-    
-    st.markdown("---")
-    st.markdown("### 📊 Available Reports")
-    st.markdown("""
-    - **Sales Summary**: Overall performance
-    - **Top 10 Brands**: MTD & YTD rankings
-    - **Top 20 SKUs**: Product-level insights
-    - **Customer Channel**: Top 10 by channel
-    """)
+
 
 # Month names for display
 month_names = ["", "January", "February", "March", "April", "May", "June", 
