@@ -771,6 +771,7 @@ def compute_item_year_metrics(item_df, year, month):
     cost_col = None
     desc_col = None
     returns_col = None
+    qty_col = None
     
     for col in df.columns:
         col_lower = str(col).strip().lower()
@@ -784,11 +785,13 @@ def compute_item_year_metrics(item_df, year, month):
             cost_col = col
         elif 'sales returns' in col_lower and not returns_col:
             returns_col = col
+        elif 'quantity' in col_lower and not qty_col:
+            qty_col = col
         elif any(k in col_lower for k in ['description','item','name']) and not desc_col:
             desc_col = col
 
     if not year_col or not period_col or not sales_col:
-        return {'mtd_sales':0.0,'mtd_cost':0.0,'ytd_sales':0.0,'ytd_cost':0.0,'desc':None}
+        return {'mtd_sales':0.0,'mtd_cost':0.0,'ytd_sales':0.0,'ytd_cost':0.0,'mtd_qty':0,'ytd_qty':0,'desc':None}
 
     df[year_col] = pd.to_numeric(df[year_col], errors='coerce')
     df[period_col] = pd.to_numeric(df[period_col], errors='coerce')
@@ -797,10 +800,12 @@ def compute_item_year_metrics(item_df, year, month):
         df[cost_col] = pd.to_numeric(df[cost_col], errors='coerce').fillna(0)
     if returns_col:
         df[returns_col] = pd.to_numeric(df[returns_col], errors='coerce').fillna(0)
+    if qty_col:
+        df[qty_col] = pd.to_numeric(df[qty_col], errors='coerce').fillna(0)
 
     year_data = df[df[year_col] == year]
     if year_data.empty:
-        return {'mtd_sales':0.0,'mtd_cost':0.0,'ytd_sales':0.0,'ytd_cost':0.0,'desc':None}
+        return {'mtd_sales':0.0,'mtd_cost':0.0,'ytd_sales':0.0,'ytd_cost':0.0,'mtd_qty':0,'ytd_qty':0,'desc':None}
 
     mtd_data = year_data[year_data[period_col] == month]
     ytd_data = year_data[year_data[period_col] <= month]
@@ -808,9 +813,11 @@ def compute_item_year_metrics(item_df, year, month):
     mtd_sales = float(mtd_data[sales_col].sum())
     mtd_returns = float(mtd_data[returns_col].sum()) if returns_col else 0.0
     mtd_cost = float(mtd_data[cost_col].sum()) if cost_col else 0.0
+    mtd_qty = int(mtd_data[qty_col].sum()) if qty_col else 0
     ytd_sales = float(ytd_data[sales_col].sum())
     ytd_returns = float(ytd_data[returns_col].sum()) if returns_col else 0.0
     ytd_cost = float(ytd_data[cost_col].sum()) if cost_col else 0.0
+    ytd_qty = int(ytd_data[qty_col].sum()) if qty_col else 0
     
     # Net Sales = Sales Amount - Sales Returns
     mtd_net_sales = mtd_sales - mtd_returns
@@ -822,7 +829,7 @@ def compute_item_year_metrics(item_df, year, month):
         if len(non_nulls):
             desc_val = non_nulls.iloc[0]
 
-    return {'mtd_sales':mtd_net_sales,'mtd_cost':mtd_cost,'ytd_sales':ytd_net_sales,'ytd_cost':ytd_cost,'desc':desc_val}
+    return {'mtd_sales':mtd_net_sales,'mtd_cost':mtd_cost,'ytd_sales':ytd_net_sales,'ytd_cost':ytd_cost,'mtd_qty':mtd_qty,'ytd_qty':ytd_qty,'desc':desc_val}
 
 def create_sku_report(all_items, target_month, target_year, comparison_year, month_name, report_type='MTD'):
     """Create Top-20 SKU MTD or YTD Performance report (excludes MX and MEI products)"""
@@ -863,16 +870,16 @@ def create_sku_report(all_items, target_month, target_year, comparison_year, mon
             'code': sku_code,
             'name': item_name,
             f'{target_year}_mtd_sales': metrics_current['mtd_sales'],
-            f'{target_year}_mtd_qty': 0,  # Quantity not available in current data structure
+            f'{target_year}_mtd_qty': metrics_current['mtd_qty'],
             f'{target_year}_mtd_gp': current_mtd_gp,
             f'{comparison_year}_mtd_sales': metrics_previous['mtd_sales'],
-            f'{comparison_year}_mtd_qty': 0,
+            f'{comparison_year}_mtd_qty': metrics_previous['mtd_qty'],
             f'{comparison_year}_mtd_gp': previous_mtd_gp,
             f'{target_year}_ytd_sales': metrics_current['ytd_sales'],
-            f'{target_year}_ytd_qty': 0,
+            f'{target_year}_ytd_qty': metrics_current['ytd_qty'],
             f'{target_year}_ytd_gp': current_ytd_gp,
             f'{comparison_year}_ytd_sales': metrics_previous['ytd_sales'],
-            f'{comparison_year}_ytd_qty': 0,
+            f'{comparison_year}_ytd_qty': metrics_previous['ytd_qty'],
             f'{comparison_year}_ytd_gp': previous_ytd_gp,
         })
     
@@ -1998,8 +2005,10 @@ def generate_top10_customers_by_channel(
     df_raw = pd.read_excel(sales_file, header=None)
     
     col_period = 1
+    col_quantity = 14
     col_sales_amount = 17
     col_sales_returns = 20  # Sales Returns column
+    col_cost_of_sales = 22  # Cost of Sales column
     
     data_rows = []
     current_customer = None
@@ -2032,13 +2041,17 @@ def generate_top10_customers_by_channel(
                 except (ValueError, TypeError):
                     month = None
             
+            quantity = row.iloc[col_quantity] if len(row) > col_quantity else 0
             sales_amount = row.iloc[col_sales_amount]
             sales_returns = row.iloc[col_sales_returns] if len(row) > col_sales_returns else 0
+            cost_of_sales = row.iloc[col_cost_of_sales] if len(row) > col_cost_of_sales else 0
             
             if pd.notna(sales_amount) and current_customer and month is not None:
                 try:
+                    qty_value = int(float(quantity)) if pd.notna(quantity) else 0
                     sales_value = float(sales_amount)
                     returns_value = float(sales_returns) if pd.notna(sales_returns) else 0
+                    cost_value = float(cost_of_sales) if pd.notna(cost_of_sales) else 0
                     # Net Sales = Sales Amount - Sales Returns
                     net_sales = sales_value - returns_value
                     data_rows.append({
@@ -2046,7 +2059,9 @@ def generate_top10_customers_by_channel(
                         'Customer Name': current_customer_name,
                         'Year': year,
                         'Month': month,
-                        'Sales Amount': net_sales
+                        'Quantity': qty_value,
+                        'Sales Amount': net_sales,
+                        'Cost': cost_value
                     })
                 except (ValueError, TypeError):
                     pass
@@ -2109,7 +2124,9 @@ def generate_top10_customers_by_channel(
             agg_cols.append(sr_col)
         
         result = df.groupby(agg_cols, dropna=False).agg({
-            'Sales Amount': 'sum'
+            'Quantity': 'sum',
+            'Sales Amount': 'sum',
+            'Cost': 'sum'
         }).reset_index()
         return result
     
@@ -2119,39 +2136,61 @@ def generate_top10_customers_by_channel(
     ytd_prev_agg = aggregate_by_customer(df_ytd_prev, channel_col, sales_rep_col)
     
     # Rename columns
-    mtd_current_agg = mtd_current_agg.rename(columns={'Sales Amount': f'{target_year}_MTD_Sales'})
-    mtd_prev_agg = mtd_prev_agg.rename(columns={'Sales Amount': f'{prev_year}_MTD_Sales'})
-    ytd_current_agg = ytd_current_agg.rename(columns={'Sales Amount': f'{target_year}_YTD_Sales'})
-    ytd_prev_agg = ytd_prev_agg.rename(columns={'Sales Amount': f'{prev_year}_YTD_Sales'})
+    mtd_current_agg = mtd_current_agg.rename(columns={
+        'Quantity': f'{target_year}_MTD_Qty',
+        'Sales Amount': f'{target_year}_MTD_Sales',
+        'Cost': f'{target_year}_MTD_Cost'
+    })
+    mtd_prev_agg = mtd_prev_agg.rename(columns={
+        'Quantity': f'{prev_year}_MTD_Qty',
+        'Sales Amount': f'{prev_year}_MTD_Sales',
+        'Cost': f'{prev_year}_MTD_Cost'
+    })
+    ytd_current_agg = ytd_current_agg.rename(columns={
+        'Quantity': f'{target_year}_YTD_Qty',
+        'Sales Amount': f'{target_year}_YTD_Sales',
+        'Cost': f'{target_year}_YTD_Cost'
+    })
+    ytd_prev_agg = ytd_prev_agg.rename(columns={
+        'Quantity': f'{prev_year}_YTD_Qty',
+        'Sales Amount': f'{prev_year}_YTD_Sales',
+        'Cost': f'{prev_year}_YTD_Cost'
+    })
     
     # Start with MTD current
     customer_metrics = mtd_current_agg.copy()
     
     # Merge MTD previous
     customer_metrics = customer_metrics.merge(
-        mtd_prev_agg[['Customer #', f'{prev_year}_MTD_Sales']],
+        mtd_prev_agg[['Customer #', f'{prev_year}_MTD_Qty', f'{prev_year}_MTD_Sales', f'{prev_year}_MTD_Cost']],
         on='Customer #',
         how='outer'
     )
     
     # Merge YTD current
     customer_metrics = customer_metrics.merge(
-        ytd_current_agg[['Customer #', f'{target_year}_YTD_Sales']],
+        ytd_current_agg[['Customer #', f'{target_year}_YTD_Qty', f'{target_year}_YTD_Sales', f'{target_year}_YTD_Cost']],
         on='Customer #',
         how='outer'
     )
     
     # Merge YTD previous
     customer_metrics = customer_metrics.merge(
-        ytd_prev_agg[['Customer #', f'{prev_year}_YTD_Sales']],
+        ytd_prev_agg[['Customer #', f'{prev_year}_YTD_Qty', f'{prev_year}_YTD_Sales', f'{prev_year}_YTD_Cost']],
         on='Customer #',
         how='outer'
     )
     
-    # Fill NaN values with 0 for sales columns
-    sales_cols = [f'{target_year}_MTD_Sales', f'{prev_year}_MTD_Sales', 
-                  f'{target_year}_YTD_Sales', f'{prev_year}_YTD_Sales']
-    for col in sales_cols:
+    # Fill NaN values with 0 for numeric columns
+    numeric_cols = [
+        f'{target_year}_MTD_Qty', f'{prev_year}_MTD_Qty',
+        f'{target_year}_YTD_Qty', f'{prev_year}_YTD_Qty',
+        f'{target_year}_MTD_Sales', f'{prev_year}_MTD_Sales', 
+        f'{target_year}_YTD_Sales', f'{prev_year}_YTD_Sales',
+        f'{target_year}_MTD_Cost', f'{prev_year}_MTD_Cost',
+        f'{target_year}_YTD_Cost', f'{prev_year}_YTD_Cost'
+    ]
+    for col in numeric_cols:
         if col in customer_metrics.columns:
             customer_metrics[col] = customer_metrics[col].fillna(0)
     
@@ -2182,14 +2221,39 @@ def generate_top10_customers_by_channel(
     # STEP 4: Calculate Channel-Level MTD/YTD Totals
     # ============================================================
     channel_metrics = customer_metrics.groupby(channel_col).agg({
+        f'{target_year}_MTD_Qty': 'sum',
+        f'{prev_year}_MTD_Qty': 'sum',
+        f'{target_year}_YTD_Qty': 'sum',
+        f'{prev_year}_YTD_Qty': 'sum',
         f'{target_year}_MTD_Sales': 'sum',
         f'{prev_year}_MTD_Sales': 'sum',
         f'{target_year}_YTD_Sales': 'sum',
         f'{prev_year}_YTD_Sales': 'sum',
+        f'{target_year}_MTD_Cost': 'sum',
+        f'{prev_year}_MTD_Cost': 'sum',
+        f'{target_year}_YTD_Cost': 'sum',
+        f'{prev_year}_YTD_Cost': 'sum',
         'Customer #': 'count'
     }).reset_index()
     
     channel_metrics = channel_metrics.rename(columns={'Customer #': 'Customer_Count'})
+    
+    # Calculate GP% for channels
+    def calc_gp_pct(sales, cost):
+        return ((sales - cost) / sales * 100) if sales > 0 else 0.0
+    
+    channel_metrics[f'{target_year}_MTD_GP%'] = channel_metrics.apply(
+        lambda x: calc_gp_pct(x[f'{target_year}_MTD_Sales'], x[f'{target_year}_MTD_Cost']), axis=1
+    )
+    channel_metrics[f'{prev_year}_MTD_GP%'] = channel_metrics.apply(
+        lambda x: calc_gp_pct(x[f'{prev_year}_MTD_Sales'], x[f'{prev_year}_MTD_Cost']), axis=1
+    )
+    channel_metrics[f'{target_year}_YTD_GP%'] = channel_metrics.apply(
+        lambda x: calc_gp_pct(x[f'{target_year}_YTD_Sales'], x[f'{target_year}_YTD_Cost']), axis=1
+    )
+    channel_metrics[f'{prev_year}_YTD_GP%'] = channel_metrics.apply(
+        lambda x: calc_gp_pct(x[f'{prev_year}_YTD_Sales'], x[f'{prev_year}_YTD_Cost']), axis=1
+    )
     
     # Calculate % Achieved for channels
     channel_metrics['MTD_Achieved_%'] = channel_metrics.apply(
@@ -2212,13 +2276,34 @@ def generate_top10_customers_by_channel(
     )
     
     # Calculate Grand Total
+    total_mtd_sales_curr = channel_metrics[f'{target_year}_MTD_Sales'].sum()
+    total_mtd_cost_curr = channel_metrics[f'{target_year}_MTD_Cost'].sum()
+    total_ytd_sales_curr = channel_metrics[f'{target_year}_YTD_Sales'].sum()
+    total_ytd_cost_curr = channel_metrics[f'{target_year}_YTD_Cost'].sum()
+    total_mtd_sales_prev = channel_metrics[f'{prev_year}_MTD_Sales'].sum()
+    total_mtd_cost_prev = channel_metrics[f'{prev_year}_MTD_Cost'].sum()
+    total_ytd_sales_prev = channel_metrics[f'{prev_year}_YTD_Sales'].sum()
+    total_ytd_cost_prev = channel_metrics[f'{prev_year}_YTD_Cost'].sum()
+    
     grand_total = {
         'Channel': 'GRAND TOTAL',
         'Customer_Count': channel_metrics['Customer_Count'].sum(),
-        f'{target_year}_MTD_Sales': channel_metrics[f'{target_year}_MTD_Sales'].sum(),
-        f'{prev_year}_MTD_Sales': channel_metrics[f'{prev_year}_MTD_Sales'].sum(),
-        f'{target_year}_YTD_Sales': channel_metrics[f'{target_year}_YTD_Sales'].sum(),
-        f'{prev_year}_YTD_Sales': channel_metrics[f'{prev_year}_YTD_Sales'].sum(),
+        f'{target_year}_MTD_Qty': channel_metrics[f'{target_year}_MTD_Qty'].sum(),
+        f'{prev_year}_MTD_Qty': channel_metrics[f'{prev_year}_MTD_Qty'].sum(),
+        f'{target_year}_YTD_Qty': channel_metrics[f'{target_year}_YTD_Qty'].sum(),
+        f'{prev_year}_YTD_Qty': channel_metrics[f'{prev_year}_YTD_Qty'].sum(),
+        f'{target_year}_MTD_Sales': total_mtd_sales_curr,
+        f'{prev_year}_MTD_Sales': total_mtd_sales_prev,
+        f'{target_year}_YTD_Sales': total_ytd_sales_curr,
+        f'{prev_year}_YTD_Sales': total_ytd_sales_prev,
+        f'{target_year}_MTD_Cost': total_mtd_cost_curr,
+        f'{prev_year}_MTD_Cost': total_mtd_cost_prev,
+        f'{target_year}_YTD_Cost': total_ytd_cost_curr,
+        f'{prev_year}_YTD_Cost': total_ytd_cost_prev,
+        f'{target_year}_MTD_GP%': calc_gp_pct(total_mtd_sales_curr, total_mtd_cost_curr),
+        f'{prev_year}_MTD_GP%': calc_gp_pct(total_mtd_sales_prev, total_mtd_cost_prev),
+        f'{target_year}_YTD_GP%': calc_gp_pct(total_ytd_sales_curr, total_ytd_cost_curr),
+        f'{prev_year}_YTD_GP%': calc_gp_pct(total_ytd_sales_prev, total_ytd_cost_prev),
     }
     grand_total['MTD_Achieved_%'] = (grand_total[f'{target_year}_MTD_Sales'] / grand_total[f'{prev_year}_MTD_Sales'] * 100) if grand_total[f'{prev_year}_MTD_Sales'] > 0 else 0
     grand_total['YTD_Achieved_%'] = (grand_total[f'{target_year}_YTD_Sales'] / grand_total[f'{prev_year}_YTD_Sales'] * 100) if grand_total[f'{prev_year}_YTD_Sales'] > 0 else 0
@@ -2301,7 +2386,7 @@ def create_channel_customer_excel_report(results, target_month, target_year, mon
     ws_summary = wb.create_sheet(title="Channel Summary", index=0)
     
     # Title
-    ws_summary.merge_cells('A1:J1')
+    ws_summary.merge_cells('A1:R1')
     ws_summary['A1'] = f"Channel Performance Summary - MTD/YTD ({target_month}/{target_year})"
     ws_summary['A1'].font = Font(bold=True, size=16)
     ws_summary['A1'].alignment = Alignment(horizontal='center')
@@ -2309,8 +2394,12 @@ def create_channel_customer_excel_report(results, target_month, target_year, mon
     # Channel Summary Headers
     summary_headers = [
         'Channel', 'Customers',
-        f'{target_year} MTD', f'{prev_year} MTD', 'MTD %', 'MTD YoY Growth',
-        f'{target_year} YTD', f'{prev_year} YTD', 'YTD %', 'YTD YoY Growth'
+        f'{target_year} MTD', f'{target_year} MTD QTY', f'{target_year} MTD GP%',
+        f'{prev_year} MTD', f'{prev_year} MTD QTY', f'{prev_year} MTD GP%',
+        'MTD %',
+        f'{target_year} YTD', f'{target_year} YTD QTY', f'{target_year} YTD GP%',
+        f'{prev_year} YTD', f'{prev_year} YTD QTY', f'{prev_year} YTD GP%',
+        'YTD %'
     ]
     
     for col_idx, header in enumerate(summary_headers, start=1):
@@ -2326,112 +2415,230 @@ def create_channel_customer_excel_report(results, target_month, target_year, mon
         if ch_row[channel_col] == 'Unknown':
             continue
         
-        ws_summary.cell(row=row_idx, column=1, value=ch_row[channel_col]).border = border
-        ws_summary.cell(row=row_idx, column=2, value=ch_row['Customer_Count']).border = border
+        col = 1
+        ws_summary.cell(row=row_idx, column=col, value=ch_row[channel_col]).border = border
+        col += 1
+        ws_summary.cell(row=row_idx, column=col, value=ch_row['Customer_Count']).border = border
+        col += 1
         
-        # MTD Current Year
-        cell = ws_summary.cell(row=row_idx, column=3, value=ch_row[f'{target_year}_MTD_Sales'])
+        # MTD Current Year Sales
+        cell = ws_summary.cell(row=row_idx, column=col, value=ch_row[f'{target_year}_MTD_Sales'])
         cell.number_format = '$#,##0.00'
         cell.fill = current_year_fill
         cell.border = border
+        col += 1
         
-        # MTD Previous Year
-        cell = ws_summary.cell(row=row_idx, column=4, value=ch_row[f'{prev_year}_MTD_Sales'])
+        # MTD Current Year QTY
+        cell = ws_summary.cell(row=row_idx, column=col, value=int(ch_row[f'{target_year}_MTD_Qty']))
+        cell.number_format = '#,##0'
+        cell.fill = current_year_fill
+        cell.border = border
+        col += 1
+        
+        # MTD Current Year GP%
+        cell = ws_summary.cell(row=row_idx, column=col, value=ch_row[f'{target_year}_MTD_GP%'] / 100)
+        cell.number_format = '0.00%'
+        cell.fill = current_year_fill
+        cell.border = border
+        col += 1
+        
+        # MTD Previous Year Sales
+        cell = ws_summary.cell(row=row_idx, column=col, value=ch_row[f'{prev_year}_MTD_Sales'])
         cell.number_format = '$#,##0.00'
         cell.fill = prev_year_fill
         cell.border = border
+        col += 1
+        
+        # MTD Previous Year QTY
+        cell = ws_summary.cell(row=row_idx, column=col, value=int(ch_row[f'{prev_year}_MTD_Qty']))
+        cell.number_format = '#,##0'
+        cell.fill = prev_year_fill
+        cell.border = border
+        col += 1
+        
+        # MTD Previous Year GP%
+        cell = ws_summary.cell(row=row_idx, column=col, value=ch_row[f'{prev_year}_MTD_GP%'] / 100)
+        cell.number_format = '0.00%'
+        cell.fill = prev_year_fill
+        cell.border = border
+        col += 1
         
         # MTD Achieved %
-        cell = ws_summary.cell(row=row_idx, column=5, value=ch_row['MTD_Achieved_%'] / 100)
+        cell = ws_summary.cell(row=row_idx, column=col, value=ch_row['MTD_Achieved_%'] / 100)
         cell.number_format = '0.0%'
         cell.fill = achieved_fill
         cell.border = border
+        col += 1
         
-        # MTD YoY Growth
-        cell = ws_summary.cell(row=row_idx, column=6, value=ch_row['MTD_YoY_Growth'] / 100)
-        cell.number_format = '+0.0%;-0.0%'
-        cell.border = border
-        
-        # YTD Current Year
-        cell = ws_summary.cell(row=row_idx, column=7, value=ch_row[f'{target_year}_YTD_Sales'])
+        # YTD Current Year Sales
+        cell = ws_summary.cell(row=row_idx, column=col, value=ch_row[f'{target_year}_YTD_Sales'])
         cell.number_format = '$#,##0.00'
         cell.fill = current_year_fill
         cell.border = border
+        col += 1
         
-        # YTD Previous Year
-        cell = ws_summary.cell(row=row_idx, column=8, value=ch_row[f'{prev_year}_YTD_Sales'])
+        # YTD Current Year QTY
+        cell = ws_summary.cell(row=row_idx, column=col, value=int(ch_row[f'{target_year}_YTD_Qty']))
+        cell.number_format = '#,##0'
+        cell.fill = current_year_fill
+        cell.border = border
+        col += 1
+        
+        # YTD Current Year GP%
+        cell = ws_summary.cell(row=row_idx, column=col, value=ch_row[f'{target_year}_YTD_GP%'] / 100)
+        cell.number_format = '0.00%'
+        cell.fill = current_year_fill
+        cell.border = border
+        col += 1
+        
+        # YTD Previous Year Sales
+        cell = ws_summary.cell(row=row_idx, column=col, value=ch_row[f'{prev_year}_YTD_Sales'])
         cell.number_format = '$#,##0.00'
         cell.fill = prev_year_fill
         cell.border = border
+        col += 1
+        
+        # YTD Previous Year QTY
+        cell = ws_summary.cell(row=row_idx, column=col, value=int(ch_row[f'{prev_year}_YTD_Qty']))
+        cell.number_format = '#,##0'
+        cell.fill = prev_year_fill
+        cell.border = border
+        col += 1
+        
+        # YTD Previous Year GP%
+        cell = ws_summary.cell(row=row_idx, column=col, value=ch_row[f'{prev_year}_YTD_GP%'] / 100)
+        cell.number_format = '0.00%'
+        cell.fill = prev_year_fill
+        cell.border = border
+        col += 1
         
         # YTD Achieved %
-        cell = ws_summary.cell(row=row_idx, column=9, value=ch_row['YTD_Achieved_%'] / 100)
+        cell = ws_summary.cell(row=row_idx, column=col, value=ch_row['YTD_Achieved_%'] / 100)
         cell.number_format = '0.0%'
         cell.fill = achieved_fill
-        cell.border = border
-        
-        # YTD YoY Growth
-        cell = ws_summary.cell(row=row_idx, column=10, value=ch_row['YTD_YoY_Growth'] / 100)
-        cell.number_format = '+0.0%;-0.0%'
         cell.border = border
         
         row_idx += 1
     
     # Grand Total Row
-    ws_summary.cell(row=row_idx, column=1, value='GRAND TOTAL').font = Font(bold=True)
-    ws_summary.cell(row=row_idx, column=1).fill = total_fill
-    ws_summary.cell(row=row_idx, column=1).border = border
+    col = 1
+    ws_summary.cell(row=row_idx, column=col, value='GRAND TOTAL').font = Font(bold=True)
+    ws_summary.cell(row=row_idx, column=col).fill = total_fill
+    ws_summary.cell(row=row_idx, column=col).border = border
+    col += 1
     
-    ws_summary.cell(row=row_idx, column=2, value=grand_total['Customer_Count']).font = Font(bold=True)
-    ws_summary.cell(row=row_idx, column=2).fill = total_fill
-    ws_summary.cell(row=row_idx, column=2).border = border
+    ws_summary.cell(row=row_idx, column=col, value=grand_total['Customer_Count']).font = Font(bold=True)
+    ws_summary.cell(row=row_idx, column=col).fill = total_fill
+    ws_summary.cell(row=row_idx, column=col).border = border
+    col += 1
     
-    cell = ws_summary.cell(row=row_idx, column=3, value=grand_total[f'{target_year}_MTD_Sales'])
+    # Grand Total MTD Current Year Sales
+    cell = ws_summary.cell(row=row_idx, column=col, value=grand_total[f'{target_year}_MTD_Sales'])
     cell.number_format = '$#,##0.00'
     cell.font = Font(bold=True)
     cell.fill = total_fill
     cell.border = border
+    col += 1
     
-    cell = ws_summary.cell(row=row_idx, column=4, value=grand_total[f'{prev_year}_MTD_Sales'])
+    # Grand Total MTD Current Year QTY
+    cell = ws_summary.cell(row=row_idx, column=col, value=int(grand_total[f'{target_year}_MTD_Qty']))
+    cell.number_format = '#,##0'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    col += 1
+    
+    # Grand Total MTD Current Year GP%
+    cell = ws_summary.cell(row=row_idx, column=col, value=grand_total[f'{target_year}_MTD_GP%'] / 100)
+    cell.number_format = '0.00%'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    col += 1
+    
+    # Grand Total MTD Previous Year Sales
+    cell = ws_summary.cell(row=row_idx, column=col, value=grand_total[f'{prev_year}_MTD_Sales'])
     cell.number_format = '$#,##0.00'
     cell.font = Font(bold=True)
     cell.fill = total_fill
     cell.border = border
+    col += 1
     
-    cell = ws_summary.cell(row=row_idx, column=5, value=grand_total['MTD_Achieved_%'] / 100)
+    # Grand Total MTD Previous Year QTY
+    cell = ws_summary.cell(row=row_idx, column=col, value=int(grand_total[f'{prev_year}_MTD_Qty']))
+    cell.number_format = '#,##0'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    col += 1
+    
+    # Grand Total MTD Previous Year GP%
+    cell = ws_summary.cell(row=row_idx, column=col, value=grand_total[f'{prev_year}_MTD_GP%'] / 100)
+    cell.number_format = '0.00%'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    col += 1
+    
+    # Grand Total MTD Achieved %
+    cell = ws_summary.cell(row=row_idx, column=col, value=grand_total['MTD_Achieved_%'] / 100)
     cell.number_format = '0.0%'
     cell.font = Font(bold=True)
     cell.fill = total_fill
     cell.border = border
+    col += 1
     
-    mtd_growth = ((grand_total[f'{target_year}_MTD_Sales'] - grand_total[f'{prev_year}_MTD_Sales']) / grand_total[f'{prev_year}_MTD_Sales'] * 100) if grand_total[f'{prev_year}_MTD_Sales'] > 0 else 0
-    cell = ws_summary.cell(row=row_idx, column=6, value=mtd_growth / 100)
-    cell.number_format = '+0.0%;-0.0%'
-    cell.font = Font(bold=True)
-    cell.fill = total_fill
-    cell.border = border
-    
-    cell = ws_summary.cell(row=row_idx, column=7, value=grand_total[f'{target_year}_YTD_Sales'])
+    # Grand Total YTD Current Year Sales
+    cell = ws_summary.cell(row=row_idx, column=col, value=grand_total[f'{target_year}_YTD_Sales'])
     cell.number_format = '$#,##0.00'
     cell.font = Font(bold=True)
     cell.fill = total_fill
     cell.border = border
+    col += 1
     
-    cell = ws_summary.cell(row=row_idx, column=8, value=grand_total[f'{prev_year}_YTD_Sales'])
+    # Grand Total YTD Current Year QTY
+    cell = ws_summary.cell(row=row_idx, column=col, value=int(grand_total[f'{target_year}_YTD_Qty']))
+    cell.number_format = '#,##0'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    col += 1
+    
+    # Grand Total YTD Current Year GP%
+    cell = ws_summary.cell(row=row_idx, column=col, value=grand_total[f'{target_year}_YTD_GP%'] / 100)
+    cell.number_format = '0.00%'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    col += 1
+    
+    # Grand Total YTD Previous Year Sales
+    cell = ws_summary.cell(row=row_idx, column=col, value=grand_total[f'{prev_year}_YTD_Sales'])
     cell.number_format = '$#,##0.00'
     cell.font = Font(bold=True)
     cell.fill = total_fill
     cell.border = border
+    col += 1
     
-    cell = ws_summary.cell(row=row_idx, column=9, value=grand_total['YTD_Achieved_%'] / 100)
+    # Grand Total YTD Previous Year QTY
+    cell = ws_summary.cell(row=row_idx, column=col, value=int(grand_total[f'{prev_year}_YTD_Qty']))
+    cell.number_format = '#,##0'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    col += 1
+    
+    # Grand Total YTD Previous Year GP%
+    cell = ws_summary.cell(row=row_idx, column=col, value=grand_total[f'{prev_year}_YTD_GP%'] / 100)
+    cell.number_format = '0.00%'
+    cell.font = Font(bold=True)
+    cell.fill = total_fill
+    cell.border = border
+    col += 1
+    
+    # Grand Total YTD Achieved %
+    cell = ws_summary.cell(row=row_idx, column=col, value=grand_total['YTD_Achieved_%'] / 100)
     cell.number_format = '0.0%'
-    cell.font = Font(bold=True)
-    cell.fill = total_fill
-    cell.border = border
-    
-    ytd_growth = ((grand_total[f'{target_year}_YTD_Sales'] - grand_total[f'{prev_year}_YTD_Sales']) / grand_total[f'{prev_year}_YTD_Sales'] * 100) if grand_total[f'{prev_year}_YTD_Sales'] > 0 else 0
-    cell = ws_summary.cell(row=row_idx, column=10, value=ytd_growth / 100)
-    cell.number_format = '+0.0%;-0.0%'
     cell.font = Font(bold=True)
     cell.fill = total_fill
     cell.border = border
@@ -2439,14 +2646,8 @@ def create_channel_customer_excel_report(results, target_month, target_year, mon
     # Adjust column widths
     ws_summary.column_dimensions['A'].width = 18
     ws_summary.column_dimensions['B'].width = 12
-    ws_summary.column_dimensions['C'].width = 16
-    ws_summary.column_dimensions['D'].width = 16
-    ws_summary.column_dimensions['E'].width = 10
-    ws_summary.column_dimensions['F'].width = 14
-    ws_summary.column_dimensions['G'].width = 16
-    ws_summary.column_dimensions['H'].width = 16
-    ws_summary.column_dimensions['I'].width = 10
-    ws_summary.column_dimensions['J'].width = 14
+    for col_letter in ['C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P']:
+        ws_summary.column_dimensions[col_letter].width = 14
     
     ws_summary.row_dimensions[3].height = 30
     
@@ -4282,8 +4483,10 @@ if uploaded_file is not None:
                             'Code': row['code'],
                             'Item Name': row['name'][:50] + '...' if len(row['name']) > 50 else row['name'],
                             f'{target_year} MTD Sales': f"${row[f'{target_year}_mtd_sales']:,.2f}",
+                            f'{target_year} MTD QTY': f"{row[f'{target_year}_mtd_qty']:,}",
                             f'{target_year} GP%': f"{row[f'{target_year}_mtd_gp']:.2f}%",
                             f'{comparison_year} MTD Sales': f"${row[f'{comparison_year}_mtd_sales']:,.2f}",
+                            f'{comparison_year} MTD QTY': f"{row[f'{comparison_year}_mtd_qty']:,}",
                             f'{comparison_year} GP%': f"{row[f'{comparison_year}_mtd_gp']:.2f}%"
                         })
                     
@@ -4299,8 +4502,10 @@ if uploaded_file is not None:
                                 'Code': row['code'],
                                 'Item Name': row['name'][:50] + '...' if len(row['name']) > 50 else row['name'],
                                 f'{target_year} YTD Sales': f"${row[f'{target_year}_ytd_sales']:,.2f}",
+                                f'{target_year} YTD QTY': f"{row[f'{target_year}_ytd_qty']:,}",
                                 f'{target_year} GP%': f"{row[f'{target_year}_ytd_gp']:.2f}%",
                                 f'{comparison_year} YTD Sales': f"${row[f'{comparison_year}_ytd_sales']:,.2f}",
+                                f'{comparison_year} YTD QTY': f"{row[f'{comparison_year}_ytd_qty']:,}",
                                 f'{comparison_year} GP%': f"{row[f'{comparison_year}_ytd_gp']:.2f}%"
                             })
                         
@@ -4335,10 +4540,18 @@ if uploaded_file is not None:
                                 'Channel': ch_row[channel_col],
                                 'Customers': ch_row['Customer_Count'],
                                 f'{target_year} MTD': f"${ch_row[f'{target_year}_MTD_Sales']:,.2f}",
+                                f'{target_year} MTD QTY': f"{int(ch_row[f'{target_year}_MTD_Qty']):,}",
+                                f'{target_year} MTD GP%': f"{ch_row[f'{target_year}_MTD_GP%']:.2f}%",
                                 f'{prev_year} MTD': f"${ch_row[f'{prev_year}_MTD_Sales']:,.2f}",
+                                f'{prev_year} MTD QTY': f"{int(ch_row[f'{prev_year}_MTD_Qty']):,}",
+                                f'{prev_year} MTD GP%': f"{ch_row[f'{prev_year}_MTD_GP%']:.2f}%",
                                 'MTD %': f"{ch_row['MTD_Achieved_%']:.1f}%",
                                 f'{target_year} YTD': f"${ch_row[f'{target_year}_YTD_Sales']:,.2f}",
+                                f'{target_year} YTD QTY': f"{int(ch_row[f'{target_year}_YTD_Qty']):,}",
+                                f'{target_year} YTD GP%': f"{ch_row[f'{target_year}_YTD_GP%']:.2f}%",
                                 f'{prev_year} YTD': f"${ch_row[f'{prev_year}_YTD_Sales']:,.2f}",
+                                f'{prev_year} YTD QTY': f"{int(ch_row[f'{prev_year}_YTD_Qty']):,}",
+                                f'{prev_year} YTD GP%': f"{ch_row[f'{prev_year}_YTD_GP%']:.2f}%",
                                 'YTD %': f"{ch_row['YTD_Achieved_%']:.1f}%"
                             })
                     
