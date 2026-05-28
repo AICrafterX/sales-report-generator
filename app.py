@@ -3461,17 +3461,16 @@ def generate_sales_rep_weekly_performance(monthly_sales_df_raw, sales_budget_df,
             if len(rep_code_str) == 1 and rep_code_str.isalpha():
                 # Get budget value from the matched month column
                 budget_value = row.iloc[budget_col_idx] if budget_col_idx < len(row) else None
+                budget_amount = 0.0 
                 if pd.notna(budget_value):
                     try:
                         budget_amount = float(budget_value)
-                        if budget_amount > 0:
-                            budget_rows.append({
-                                'Rep_Code': rep_code_str.upper(),
-                                'Monthly_Budget': budget_amount
-                            })
                     except (ValueError, TypeError):
                         pass
-    
+            budget_rows.append({  
+                'Rep_Code': rep_code_str.upper(),
+                'Monthly_Budget': budget_amount
+            })
     if not budget_rows:
         st.warning(f"⚠️ No valid budget data found for {calendar.month_name[target_month]} {target_year}")
         return None
