@@ -3476,7 +3476,11 @@ def generate_sales_rep_weekly_performance(monthly_sales_df_raw, sales_budget_df,
         return None
     
     budget_data = pd.DataFrame(budget_rows)
-    
+
+    # Exclude reps who have left the company
+    EXCLUDED_REPS = {'A', 'O'}
+    budget_data = budget_data[~budget_data['Rep_Code'].isin(EXCLUDED_REPS)].reset_index(drop=True)
+
     # Map sales rep names to budget rep codes
     # The budget file has rep codes (T, A, C, O, L) - we need to map actual sales rep names to these codes
     unique_reps = df_sales[sales_rep_col].unique()
