@@ -3467,10 +3467,10 @@ def generate_sales_rep_weekly_performance(monthly_sales_df_raw, sales_budget_df,
                         budget_amount = float(budget_value)
                     except (ValueError, TypeError):
                         pass
-            budget_rows.append({  
-                'Rep_Code': rep_code_str.upper(),
-                'Monthly_Budget': budget_amount
-            })
+                budget_rows.append({
+                    'Rep_Code': rep_code_str.upper(),
+                    'Monthly_Budget': budget_amount
+                })
     if not budget_rows:
         st.warning(f"⚠️ No valid budget data found for {calendar.month_name[target_month]} {target_year}")
         return None
